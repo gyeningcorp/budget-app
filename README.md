@@ -8,6 +8,7 @@ A private, **local-first** budgeting app with an AI money advisor. Built with Re
 - **Transactions** — add/delete income & expenses with categories
 - **Budgets** — set per-category limits with budget-vs-actual progress bars
 - **Advisor** — chat with an AI advisor that sees your real numbers (Claude)
+- **Ask Rory (every page)** — a floating AI assistant on every tab that not only answers questions but *makes changes* for you: "add $40 groceries today", "set Fun budget to $150", "delete that gas charge", "take me to Budgets". It uses Claude tool-calling to edit your ledger and budgets directly.
 - **Settings** — store your API key locally, export your data as JSON, or wipe everything
 
 Your data never touches a server we control. The API key is stored only in this browser.

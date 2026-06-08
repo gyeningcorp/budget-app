@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 const LS_KEY = 'hog-budget-v1'
 const CATEGORIES = ['Income', 'Housing', 'Food', 'Transport', 'Utilities', 'Health', 'Fun', 'Savings', 'Other']
@@ -320,6 +320,8 @@ export default function App() {
       {tab === 'Settings' && <Settings state={state} update={update} setState={setState} />}
 
       <p className="foot">House of Gyening · Budget — built with React + Vite. No server, no tracking.</p>
+
+      <Assistant state={state} setState={setState} totals={totals} page={tab} setTab={setTab} />
     </div>
   )
 }
@@ -978,5 +980,309 @@ function Settings({ state, update, setState }) {
         </p>
       </div>
     </>
+  )
+}
+
+// --- In-app AI assistant (talks + edits your data) -------------------------
+const PAGES = ['Dashboard', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Settings']
+
+// Tools the model can call to mutate the ledger / budgets / navigate.
+const AI_TOOLS = [
+  {
+    name: 'add_transaction',
+    description: 'Add a new income or expense transaction to the ledger.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        desc: { type: 'string', description: 'Short description, e.g. "Groceries"' },
+        amount: { type: 'number', description: 'Positive dollar amount' },
+        type: { type: 'string', enum: ['income', 'expense'] },
+        category: { type: 'string', enum: CATEGORIES },
+        date: { type: 'string', description: 'YYYY-MM-DD; defaults to today if omitted' },
+      },
+      required: ['desc', 'amount', 'type'],
+    },
+  },
+  {
+    name: 'update_transaction',
+    description: 'Edit fields of an existing transaction by its id. Only pass fields you want to change.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        desc: { type: 'string' },
+        amount: { type: 'number' },
+        type: { type: 'string', enum: ['income', 'expense'] },
+        category: { type: 'string', enum: CATEGORIES },
+        date: { type: 'string', description: 'YYYY-MM-DD' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'delete_transaction',
+    description: 'Delete a transaction by its id.',
+    input_schema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+  },
+  {
+    name: 'set_budget',
+    description: 'Create or update a monthly budget limit for a spending category.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        category: { type: 'string', enum: CATEGORIES.filter((c) => c !== 'Income') },
+        limit: { type: 'number', description: 'Monthly limit in dollars, > 0' },
+      },
+      required: ['category', 'limit'],
+    },
+  },
+  {
+    name: 'remove_budget',
+    description: 'Remove the budget for a category.',
+    input_schema: { type: 'object', properties: { category: { type: 'string' } }, required: ['category'] },
+  },
+  {
+    name: 'navigate',
+    description: 'Switch the app to a different page/tab.',
+    input_schema: { type: 'object', properties: { page: { type: 'string', enum: PAGES } }, required: ['page'] },
+  },
+]
+
+const newId = () => 't' + Date.now() + '-' + Math.floor(Math.random() * 1e4)
+const cleanDate = (d) => (d && /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0, 10) : todayISO())
+
+// Execute one tool call against state. `stateRef` gives a live read of current
+// state (setState is batched), and we return a short string result for the model.
+function runAiTool(name, input, setState, stateRef, setTab) {
+  switch (name) {
+    case 'add_transaction': {
+      const type = input.type === 'income' ? 'income' : 'expense'
+      const category = CATEGORIES.includes(input.category)
+        ? input.category
+        : type === 'income'
+        ? 'Income'
+        : guessCategory(input.desc)
+      const tx = {
+        id: newId(),
+        desc: input.desc || '',
+        amount: Math.abs(Number(input.amount) || 0),
+        type,
+        category,
+        date: cleanDate(input.date),
+      }
+      setState((s) => ({ ...s, transactions: [tx, ...s.transactions] }))
+      return `Added ${tx.type} "${tx.desc}" ${fmt(tx.amount)} in ${tx.category} on ${tx.date} (id ${tx.id}).`
+    }
+    case 'update_transaction': {
+      const cur = stateRef.current.transactions.find((t) => t.id === input.id)
+      if (!cur) return `No transaction with id ${input.id}.`
+      const patch = {}
+      for (const k of ['desc', 'category', 'date']) if (input[k] != null) patch[k] = k === 'date' ? cleanDate(input[k]) : input[k]
+      if (input.amount != null) patch.amount = Math.abs(Number(input.amount) || 0)
+      if (input.type != null) patch.type = input.type === 'income' ? 'income' : 'expense'
+      setState((s) => ({ ...s, transactions: s.transactions.map((t) => (t.id === input.id ? { ...t, ...patch } : t)) }))
+      return `Updated ${input.id}: ${JSON.stringify(patch)}.`
+    }
+    case 'delete_transaction': {
+      const cur = stateRef.current.transactions.find((t) => t.id === input.id)
+      if (!cur) return `No transaction with id ${input.id}.`
+      if (!confirm(`Delete "${cur.desc}" ${fmt(cur.amount)} (${cur.date})?`))
+        return `User declined — "${cur.desc}" was NOT deleted.`
+      setState((s) => ({ ...s, transactions: s.transactions.filter((t) => t.id !== input.id) }))
+      return `Deleted ${input.id} ("${cur.desc}" ${fmt(cur.amount)}).`
+    }
+    case 'set_budget': {
+      const c = input.category
+      if (!CATEGORIES.includes(c) || c === 'Income') return `Invalid category "${c}".`
+      const v = Number(input.limit)
+      if (!(v > 0)) return `Limit must be greater than 0.`
+      setState((s) => ({ ...s, budgets: { ...s.budgets, [c]: v } }))
+      return `Set ${c} budget to ${fmt(v)}.`
+    }
+    case 'remove_budget': {
+      const c = input.category
+      if (stateRef.current.budgets[c] == null) return `No budget set for "${c}".`
+      if (!confirm(`Remove the ${c} budget (${fmt(stateRef.current.budgets[c])})?`))
+        return `User declined — ${c} budget was NOT removed.`
+      setState((s) => {
+        const next = { ...s.budgets }
+        delete next[c]
+        return { ...s, budgets: next }
+      })
+      return `Removed ${c} budget.`
+    }
+    case 'navigate': {
+      if (!PAGES.includes(input.page)) return `Unknown page "${input.page}".`
+      setTab(input.page)
+      return `Switched to ${input.page}.`
+    }
+    default:
+      return `Unknown tool "${name}".`
+  }
+}
+
+function Assistant({ state, setState, totals, page, setTab }) {
+  const [open, setOpen] = useState(false)
+  const [convo, setConvo] = useState([]) // Anthropic-format messages (string or block[] content)
+  const [input, setInput] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const hasKey = !!state.apiKey
+
+  // Live snapshot so tool executors read the latest state during the agent loop.
+  const stateRef = useRef(state)
+  useEffect(() => {
+    stateRef.current = state
+  }, [state])
+
+  const scrollRef = useRef(null)
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+  }, [convo, busy, open])
+
+  const systemPrompt = () => {
+    const tx = state.transactions
+      .slice()
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+      .slice(0, 50)
+      .map((t) => `${t.id} | ${t.date} | ${t.type} | ${t.category} | ${fmt(t.amount)} | ${t.desc}`)
+      .join('\n')
+    return (
+      'You are the built-in assistant for the "House of Gyening · Budget" app. ' +
+      'You can answer money questions AND directly change the user\'s data using the provided tools ' +
+      '(add/update/delete transactions, set/remove budgets, navigate pages). ' +
+      'When the user asks to add, log, change, fix, categorize, budget, or remove something, DO IT with a tool — do not just describe it. ' +
+      'To edit or delete a specific transaction, use its id from the list below. ' +
+      'After acting, confirm what you changed in one short sentence. Be concise and never invent transactions you weren\'t asked to add.\n\n' +
+      `Today is ${todayISO()}. The user is currently on the "${page}" page.\n` +
+      `Valid categories: ${CATEGORIES.join(', ')}.\n\n` +
+      'SNAPSHOT:\n' +
+      `Income ${fmt(totals.income)} · Spending ${fmt(totals.expense)} · Net ${fmt(totals.net)}\n` +
+      'Budgets: ' +
+      (Object.entries(state.budgets).map(([c, v]) => `${c} ${fmt(v)}`).join(', ') || '(none)') +
+      '\n\nRecent transactions (id | date | type | category | amount | desc):\n' +
+      (tx || '(none)')
+    )
+  }
+
+  const send = async () => {
+    const text = input.trim()
+    if (!text || busy || !hasKey) return
+    setError('')
+    setInput('')
+    let messages = [...convo, { role: 'user', content: text }]
+    setConvo(messages)
+    setBusy(true)
+    try {
+      for (let step = 0; step < 8; step++) {
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': state.apiKey,
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-direct-browser-access': 'true',
+          },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-6',
+            max_tokens: 1024,
+            system: systemPrompt(),
+            tools: AI_TOOLS,
+            messages,
+          }),
+        })
+        if (!res.ok) throw new Error(`API ${res.status}: ${(await res.text()).slice(0, 300)}`)
+        const data = await res.json()
+        const blocks = data.content || []
+        messages = [...messages, { role: 'assistant', content: blocks }]
+        setConvo(messages)
+
+        const toolUses = blocks.filter((b) => b.type === 'tool_use')
+        if (data.stop_reason === 'tool_use' && toolUses.length) {
+          const results = toolUses.map((tu) => ({
+            type: 'tool_result',
+            tool_use_id: tu.id,
+            content: runAiTool(tu.name, tu.input, setState, stateRef, setTab),
+          }))
+          messages = [...messages, { role: 'user', content: results }]
+          setConvo(messages)
+          continue
+        }
+        break
+      }
+    } catch (e) {
+      setError(e.message || String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Flatten the API conversation into renderable rows.
+  const rows = []
+  for (const m of convo) {
+    if (m.role === 'user' && typeof m.content === 'string') {
+      rows.push({ kind: 'user', text: m.content })
+    } else if (m.role === 'assistant' && Array.isArray(m.content)) {
+      const text = m.content.filter((b) => b.type === 'text').map((b) => b.text).join('')
+      if (text.trim()) rows.push({ kind: 'ai', text })
+      for (const b of m.content) if (b.type === 'tool_use') rows.push({ kind: 'tool', text: b.name })
+    }
+    // tool_result messages are represented by their tool chip above — skip.
+  }
+
+  return (
+    <div className="ai-dock">
+      {open && (
+        <div className="ai-panel">
+          <div className="ai-head">
+            <span>📚 Ask Rory · {page}</span>
+            <div className="ai-head-tools">
+              {convo.length > 0 && (
+                <button className="ai-x" title="Clear chat" onClick={() => setConvo([])}>⟲</button>
+              )}
+              <button className="ai-x" title="Close" onClick={() => setOpen(false)}>✕</button>
+            </div>
+          </div>
+
+          {!hasKey && (
+            <div className="callout" style={{ margin: 10 }}>
+              Add your <b>Anthropic API key</b> in <b>Settings</b> to use the assistant.
+            </div>
+          )}
+
+          <div className="ai-body" ref={scrollRef}>
+            {rows.length === 0 && (
+              <div className="empty" style={{ padding: '8px 4px' }}>
+                Try “add $40 groceries today”, “set Fun budget to $150”, or “where am I overspending?”
+              </div>
+            )}
+            {rows.map((r, i) =>
+              r.kind === 'tool' ? (
+                <div key={i} className="ai-toolchip">🔧 {r.text}</div>
+              ) : (
+                <div key={i} className={'bubble ' + (r.kind === 'user' ? 'user' : 'ai')}>{r.text}</div>
+              )
+            )}
+            {busy && <div className="bubble ai">Thinking…</div>}
+            {error && <div className="callout" style={{ color: 'var(--red)', marginTop: 8 }}>{error}</div>}
+          </div>
+
+          <div className="ai-input">
+            <input
+              value={input}
+              disabled={!hasKey || busy}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && send()}
+              placeholder={hasKey ? 'Talk to your budget…' : 'Add an API key in Settings'}
+            />
+            <button className="btn" disabled={!hasKey || busy} onClick={send}>Send</button>
+          </div>
+        </div>
+      )}
+
+      <button className="ai-fab" onClick={() => setOpen((o) => !o)} title="AI assistant">
+        {open ? '✕' : '📚'}
+      </button>
+    </div>
   )
 }
