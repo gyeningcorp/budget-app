@@ -18,6 +18,134 @@ const SEED = {
   apiKey: '',
 }
 
+// --- CSV helpers -----------------------------------------------------------
+function csvField(v) {
+  const s = String(v ?? '')
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s
+}
+
+function splitCSVLine(line) {
+  const out = []
+  let cur = '',
+    inQ = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (inQ) {
+      if (ch === '"' && line[i + 1] === '"') {
+        cur += '"'
+        i++
+      } else if (ch === '"') inQ = false
+      else cur += ch
+    } else if (ch === '"') inQ = true
+    else if (ch === ',') {
+      out.push(cur)
+      cur = ''
+    } else cur += ch
+  }
+  out.push(cur)
+  return out.map((s) => s.trim())
+}
+
+function normalizeDate(s) {
+  if (!s) return todayISO()
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10)
+  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/) // MM/DD/YYYY
+  if (m) {
+    const yr = m[3].length === 2 ? '20' + m[3] : m[3]
+    return `${yr}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`
+  }
+  return todayISO()
+}
+
+function guessCategory(desc) {
+  const d = (desc || '').toLowerCase()
+  const map = [
+    ['Food', /grocery|market|coffee|restaurant|cafe|food|pizza|doordash|uber eats|mcdonald|starbuck/],
+    ['Transport', /gas|fuel|uber|lyft|parking|transit|shell|exxon|chevron/],
+    ['Housing', /rent|mortgage|landlord|hoa/],
+    ['Utilities', /electric|water|internet|comcast|verizon|at&t|gas company|utility|phone/],
+    ['Health', /pharmacy|doctor|clinic|gym|cvs|walgreens|medical|dental/],
+    ['Fun', /netflix|spotify|hulu|disney|steam|cinema|movie|bar|game/],
+    ['Income', /payroll|paycheck|deposit|salary|direct dep/],
+  ]
+  for (const [cat, re] of map) if (re.test(d)) return cat
+  return 'Other'
+}
+
+// Detect common bank-export columns and build transactions.
+function parseCSV(text) {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim() !== '')
+  if (lines.length < 2) return []
+  const header = splitCSVLine(lines[0]).map((h) => h.toLowerCase())
+  const find = (...names) => header.findIndex((h) => names.some((n) => h.includes(n)))
+  const iDate = find('date', 'posted')
+  // Exclude the date column and any "...date" header so "Transaction Date" doesn't win the desc slot.
+  const iDesc = header.findIndex(
+    (h, idx) => idx !== iDate && !h.includes('date') && /description|memo|payee|details|name|transaction/.test(h)
+  )
+  const iAmt = find('amount', 'value')
+  const iType = find('type', 'debit/credit', 'cr/dr')
+  const iCat = find('category')
+  const iDebit = find('debit', 'withdrawal')
+  const iCredit = find('credit', 'deposit')
+
+  const out = []
+  for (let r = 1; r < lines.length; r++) {
+    const c = splitCSVLine(lines[r])
+    const desc = (iDesc >= 0 ? c[iDesc] : '') || 'Imported'
+    let amount = 0
+    let type = 'expense'
+
+    if (iAmt >= 0) {
+      const n = parseFloat((c[iAmt] || '').replace(/[$,]/g, ''))
+      if (!isNaN(n)) {
+        type = n < 0 ? 'expense' : 'income'
+        amount = Math.abs(n)
+      }
+    } else if (iDebit >= 0 || iCredit >= 0) {
+      const deb = parseFloat((c[iDebit] || '').replace(/[$,]/g, ''))
+      const cred = parseFloat((c[iCredit] || '').replace(/[$,]/g, ''))
+      if (!isNaN(cred) && cred > 0) {
+        type = 'income'
+        amount = cred
+      } else if (!isNaN(deb) && deb > 0) {
+        type = 'expense'
+        amount = deb
+      }
+    }
+
+    if (iType >= 0 && c[iType]) {
+      const tv = c[iType].toLowerCase()
+      if (/credit|income|deposit|cr/.test(tv)) type = 'income'
+      else if (/debit|expense|withdraw|dr/.test(tv)) type = 'expense'
+    }
+
+    if (amount === 0 && !desc) continue
+    const category =
+      type === 'income' ? 'Income' : iCat >= 0 && c[iCat] ? c[iCat] : guessCategory(desc)
+
+    out.push({
+      id: 't' + Date.now() + '-' + r,
+      desc,
+      amount,
+      type,
+      category: CATEGORIES.includes(category) ? category : guessCategory(desc),
+      date: normalizeDate(iDate >= 0 ? c[iDate] : ''),
+    })
+  }
+  return out
+}
+
+function downloadFile(name, content, mime) {
+  const blob = new Blob([content], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 function loadState() {
   try {
     const raw = localStorage.getItem(LS_KEY)
@@ -148,8 +276,35 @@ function Dashboard({ totals, transactions }) {
   )
 }
 
+// Amount cell with its own typing buffer so you can freely type "12.", clear it,
+// etc., while the parent always stores a clean number.
+function AmountCell({ value, type, onCommit }) {
+  const [raw, setRaw] = useState(String(value ?? ''))
+  useEffect(() => {
+    setRaw(value === 0 ? '' : String(value))
+  }, [value])
+  const commit = () => {
+    const n = parseFloat(raw)
+    onCommit(isNaN(n) ? 0 : n)
+  }
+  return (
+    <input
+      type="number"
+      step="0.01"
+      inputMode="decimal"
+      placeholder="0.00"
+      className={'cell-num ' + type}
+      value={raw}
+      onChange={(e) => setRaw(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+    />
+  )
+}
+
 function Transactions({ state, setState }) {
   const rows = state.transactions
+  const [importMsg, setImportMsg] = useState('')
 
   // Edit a single cell of a row, in place (spreadsheet-style).
   const editCell = (id, field, value) =>
@@ -158,10 +313,28 @@ function Transactions({ state, setState }) {
       transactions: s.transactions.map((t) => (t.id === id ? { ...t, [field]: value } : t)),
     }))
 
-  // Amount needs to be committed as a number; keep raw string while typing.
-  const commitAmount = (id, value) => {
-    const n = parseFloat(value)
-    editCell(id, 'amount', isNaN(n) ? 0 : n)
+  const importCSV = async (file) => {
+    if (!file) return
+    try {
+      const text = await file.text()
+      const imported = parseCSV(text)
+      if (!imported.length) {
+        setImportMsg('No rows found — expected columns like date, description, amount.')
+        return
+      }
+      setState((s) => ({ ...s, transactions: [...imported, ...s.transactions] }))
+      setImportMsg(`Imported ${imported.length} transaction${imported.length === 1 ? '' : 's'}.`)
+    } catch (e) {
+      setImportMsg('Import failed — ' + (e.message || String(e)))
+    }
+  }
+
+  const exportCSV = () => {
+    const head = 'date,description,type,category,amount'
+    const body = rows
+      .map((t) => [t.date, csvField(t.desc), t.type, t.category, t.amount].join(','))
+      .join('\n')
+    downloadFile('budget-transactions.csv', head + '\n' + body, 'text/csv')
   }
 
   const addRow = () =>
@@ -195,11 +368,30 @@ function Transactions({ state, setState }) {
     <div className="card" style={{ marginTop: 18 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
         <h3 style={{ margin: 0 }}>Ledger ({rows.length})</h3>
-        <button className="btn" onClick={addRow}>+ Add row</button>
+        <div className="row" style={{ gap: 8 }}>
+          <label className="btn ghost" style={{ cursor: 'pointer', margin: 0 }}>
+            Import CSV
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                importCSV(e.target.files?.[0])
+                e.target.value = ''
+              }}
+            />
+          </label>
+          <button className="btn ghost" onClick={exportCSV}>Export CSV</button>
+          <button className="btn" onClick={addRow}>+ Add row</button>
+        </div>
       </div>
       <p className="muted" style={{ marginTop: 6 }}>
-        Click any cell to edit — like a spreadsheet. Press <b>Tab</b> to move across. Changes save instantly.
+        Click any cell to edit — like a spreadsheet. Press <b>Tab</b> to move across, <b>Enter</b> to confirm an amount. Changes save instantly.
       </p>
+      <p className="muted" style={{ marginTop: 2 }}>
+        <b>Link your bank:</b> download your transactions as CSV from your bank’s website, then <b>Import CSV</b> above. Columns like <i>date, description, amount</i> are detected automatically.
+      </p>
+      {importMsg && <div className="callout" style={{ marginTop: 8 }}>{importMsg}</div>}
 
       <div className="sheet-wrap">
         <table className="sheet">
@@ -241,15 +433,7 @@ function Transactions({ state, setState }) {
                   </select>
                 </td>
                 <td className="num">
-                  <input
-                    type="number"
-                    step="0.01"
-                    className={'cell-num ' + t.type}
-                    defaultValue={t.amount}
-                    key={t.id + '-' + t.amount}
-                    onBlur={(e) => commitAmount(t.id, e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && e.target.blur()}
-                  />
+                  <AmountCell value={t.amount} type={t.type} onCommit={(n) => editCell(t.id, 'amount', n)} />
                 </td>
                 <td className="rowtools">
                   <button title="Duplicate" onClick={() => duplicate(t.id)}>⧉</button>
