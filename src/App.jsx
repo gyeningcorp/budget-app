@@ -16,6 +16,7 @@ const SEED = {
   ],
   budgets: { Food: 600, Transport: 250, Fun: 200, Utilities: 300 },
   apiKey: '',
+  bank: { url: '', secret: '' },
 }
 
 // --- CSV helpers -----------------------------------------------------------
@@ -134,6 +135,116 @@ function parseCSV(text) {
     })
   }
   return out
+}
+
+// --- Bank live-sync (Plaid via the Cloudflare Worker) ----------------------
+function loadPlaid() {
+  return new Promise((resolve, reject) => {
+    if (window.Plaid) return resolve(window.Plaid)
+    const s = document.createElement('script')
+    s.src = 'https://cdn.plaid.com/link/v2/stable/link-initialize.js'
+    s.onload = () => resolve(window.Plaid)
+    s.onerror = () => reject(new Error('Could not load Plaid Link'))
+    document.head.appendChild(s)
+  })
+}
+
+function makeApi(bank) {
+  const base = (bank?.url || '').replace(/\/$/, '')
+  return async (path, body) => {
+    if (!base) throw new Error('Set your Sync server URL in Settings → Bank Sync')
+    const res = await fetch(base + path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-app-secret': bank.secret || '' },
+      body: JSON.stringify(body || {}),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || `Server ${res.status}`)
+    return data
+  }
+}
+
+// Merge synced rows into the ledger: upsert by plaidId, drop removed ones.
+function mergeSynced(transactions, added, removedIds) {
+  const removed = new Set(removedIds || [])
+  const byKey = new Map(transactions.map((t) => [t.plaidId || t.id, t]))
+  for (const tx of added || []) byKey.set(tx.plaidId, tx)
+  return [...byKey.values()].filter((t) => !(t.plaidId && removed.has(t.plaidId)))
+}
+
+function BankBar({ state, setState }) {
+  const [busy, setBusy] = useState('')
+  const [msg, setMsg] = useState('')
+  const bank = state.bank || { url: '', secret: '' }
+  const configured = !!bank.url
+  const api = makeApi(bank)
+
+  const doSync = async () => {
+    setBusy('sync')
+    setMsg('')
+    try {
+      const { added, removedIds } = await api('/api/sync')
+      setState((s) => ({ ...s, transactions: mergeSynced(s.transactions, added, removedIds), bank: { ...bank, linked: true } }))
+      setMsg(`Synced — ${added?.length || 0} transaction${added?.length === 1 ? '' : 's'} updated.`)
+    } catch (e) {
+      setMsg('Sync failed — ' + e.message)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const connect = async () => {
+    setBusy('connect')
+    setMsg('')
+    try {
+      const { link_token } = await api('/api/create_link_token')
+      const Plaid = await loadPlaid()
+      const handler = Plaid.create({
+        token: link_token,
+        onSuccess: async (public_token) => {
+          try {
+            await api('/api/exchange_public_token', { public_token })
+            setState((s) => ({ ...s, bank: { ...bank, linked: true } }))
+            setMsg('Bank linked — syncing…')
+            await doSync()
+          } catch (e) {
+            setMsg('Link exchange failed — ' + e.message)
+          }
+        },
+        onExit: (err) => {
+          if (err) setMsg('Link cancelled — ' + (err.error_message || err.error_code || ''))
+          setBusy('')
+        },
+      })
+      handler.open()
+    } catch (e) {
+      setMsg('Could not start bank link — ' + e.message)
+      setBusy('')
+    }
+  }
+
+  if (!configured) {
+    return (
+      <div className="callout" style={{ marginTop: 10 }}>
+        <b>Live bank sync is ready to connect.</b> Add your Sync server URL + app secret in{' '}
+        <b>Settings → Bank Sync</b>, then come back here to link your bank.
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div className="row" style={{ gap: 8 }}>
+        <button className="btn" disabled={!!busy} onClick={connect}>
+          {busy === 'connect' ? 'Opening…' : bank.linked ? '🔗 Relink bank' : '🔗 Connect bank'}
+        </button>
+        <button className="btn ghost" disabled={!!busy} onClick={doSync}>
+          {busy === 'sync' ? 'Syncing…' : '↻ Sync now'}
+        </button>
+      </div>
+      {msg && <div className="callout" style={{ marginTop: 8 }}>{msg}</div>}
+    </div>
+  )
 }
 
 function downloadFile(name, content, mime) {
@@ -392,6 +503,7 @@ function Transactions({ state, setState }) {
         <b>Link your bank:</b> download your transactions as CSV from your bank’s website, then <b>Import CSV</b> above. Columns like <i>date, description, amount</i> are detected automatically.
       </p>
       {importMsg && <div className="callout" style={{ marginTop: 8 }}>{importMsg}</div>}
+      <BankBar state={state} setState={setState} />
 
       <div className="sheet-wrap">
         <table className="sheet">
@@ -777,11 +889,19 @@ function Opportunities({ state, totals, update }) {
 function Settings({ state, update, setState }) {
   const [key, setKey] = useState(state.apiKey || '')
   const [saved, setSaved] = useState(false)
+  const [bank, setBank] = useState(state.bank || { url: '', secret: '' })
+  const [bankSaved, setBankSaved] = useState(false)
 
   const save = () => {
     update({ apiKey: key.trim() })
     setSaved(true)
     setTimeout(() => setSaved(false), 1800)
+  }
+
+  const saveBank = () => {
+    update({ bank: { ...(state.bank || {}), url: bank.url.trim(), secret: bank.secret.trim() } })
+    setBankSaved(true)
+    setTimeout(() => setBankSaved(false), 1800)
   }
 
   const exportData = () => {
@@ -815,6 +935,35 @@ function Settings({ state, update, setState }) {
             <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-ant-..." />
           </div>
           <button className="btn" onClick={save}>{saved ? 'Saved ✓' : 'Save key'}</button>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 14 }}>
+        <h3>Bank Sync (live auto-sync)</h3>
+        <div className="callout" style={{ marginBottom: 12 }}>
+          Live bank linking runs through your own <b>Cloudflare Worker</b> (Plaid backend) so your bank
+          credentials and secret keys never touch this page. Setup steps are in <b>worker/README.md</b> in the repo.
+          Paste the Worker URL and the app secret you chose, then link your bank under <b>Transactions</b>.
+        </div>
+        <div className="row">
+          <div className="field" style={{ flex: 3, minWidth: 220 }}>
+            <label>Sync server URL</label>
+            <input
+              value={bank.url}
+              onChange={(e) => setBank({ ...bank, url: e.target.value })}
+              placeholder="https://budget-sync.you.workers.dev"
+            />
+          </div>
+          <div className="field" style={{ flex: 2 }}>
+            <label>App secret</label>
+            <input
+              type="password"
+              value={bank.secret}
+              onChange={(e) => setBank({ ...bank, secret: e.target.value })}
+              placeholder="the APP_SECRET you set"
+            />
+          </div>
+          <button className="btn" onClick={saveBank}>{bankSaved ? 'Saved ✓' : 'Save'}</button>
         </div>
       </div>
 
