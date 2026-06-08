@@ -66,7 +66,7 @@ export default function App() {
       </header>
 
       <nav className="tabs">
-        {['Dashboard', 'Transactions', 'Budgets', 'Advisor', 'Settings'].map((t) => (
+        {['Dashboard', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Settings'].map((t) => (
           <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>
             {t}
           </button>
@@ -77,6 +77,7 @@ export default function App() {
       {tab === 'Transactions' && <Transactions state={state} setState={setState} />}
       {tab === 'Budgets' && <Budgets state={state} update={update} byCat={totals.byCat} />}
       {tab === 'Advisor' && <Advisor state={state} totals={totals} />}
+      {tab === 'Opportunities' && <Opportunities state={state} totals={totals} update={update} />}
       {tab === 'Settings' && <Settings state={state} update={update} setState={setState} />}
 
       <p className="foot">House of Gyening · Budget — built with React + Vite. No server, no tracking.</p>
@@ -148,83 +149,128 @@ function Dashboard({ totals, transactions }) {
 }
 
 function Transactions({ state, setState }) {
-  const [form, setForm] = useState({ desc: '', amount: '', category: 'Food', type: 'expense', date: todayISO() })
+  const rows = state.transactions
 
-  const add = (e) => {
-    e.preventDefault()
-    const amount = parseFloat(form.amount)
-    if (!form.desc.trim() || !amount || amount <= 0) return
-    const tx = { ...form, id: 't' + Date.now(), amount }
-    setState((s) => ({ ...s, transactions: [tx, ...s.transactions] }))
-    setForm({ ...form, desc: '', amount: '' })
+  // Edit a single cell of a row, in place (spreadsheet-style).
+  const editCell = (id, field, value) =>
+    setState((s) => ({
+      ...s,
+      transactions: s.transactions.map((t) => (t.id === id ? { ...t, [field]: value } : t)),
+    }))
+
+  // Amount needs to be committed as a number; keep raw string while typing.
+  const commitAmount = (id, value) => {
+    const n = parseFloat(value)
+    editCell(id, 'amount', isNaN(n) ? 0 : n)
   }
+
+  const addRow = () =>
+    setState((s) => ({
+      ...s,
+      transactions: [
+        { id: 't' + Date.now(), desc: '', amount: 0, category: 'Other', type: 'expense', date: todayISO() },
+        ...s.transactions,
+      ],
+    }))
+
   const remove = (id) =>
     setState((s) => ({ ...s, transactions: s.transactions.filter((t) => t.id !== id) }))
 
-  const sorted = [...state.transactions].sort((a, b) => b.date.localeCompare(a.date))
+  const duplicate = (id) =>
+    setState((s) => {
+      const src = s.transactions.find((t) => t.id === id)
+      if (!src) return s
+      const i = s.transactions.findIndex((t) => t.id === id)
+      const copy = { ...src, id: 't' + Date.now() }
+      const next = [...s.transactions]
+      next.splice(i + 1, 0, copy)
+      return { ...s, transactions: next }
+    })
+
+  const sorted = [...rows].sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+  const totalIn = rows.filter((t) => t.type === 'income').reduce((a, t) => a + (t.amount || 0), 0)
+  const totalOut = rows.filter((t) => t.type === 'expense').reduce((a, t) => a + (t.amount || 0), 0)
 
   return (
-    <>
-      <div className="card" style={{ marginTop: 18 }}>
-        <h3>Add transaction</h3>
-        <form onSubmit={add}>
-          <div className="row">
-            <div className="field" style={{ flex: 2 }}>
-              <label>Description</label>
-              <input value={form.desc} onChange={(e) => setForm({ ...form, desc: e.target.value })} placeholder="e.g. Coffee" />
-            </div>
-            <div className="field">
-              <label>Amount</label>
-              <input type="number" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="0.00" />
-            </div>
-            <div className="field">
-              <label>Type</label>
-              <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
-                <option value="expense">Expense</option>
-                <option value="income">Income</option>
-              </select>
-            </div>
-            <div className="field">
-              <label>Category</label>
-              <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-                {CATEGORIES.map((c) => (
-                  <option key={c}>{c}</option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
-              <label>Date</label>
-              <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
-            </div>
-            <button className="btn" type="submit">Add</button>
-          </div>
-        </form>
+    <div className="card" style={{ marginTop: 18 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+        <h3 style={{ margin: 0 }}>Ledger ({rows.length})</h3>
+        <button className="btn" onClick={addRow}>+ Add row</button>
       </div>
+      <p className="muted" style={{ marginTop: 6 }}>
+        Click any cell to edit — like a spreadsheet. Press <b>Tab</b> to move across. Changes save instantly.
+      </p>
 
-      <div className="card" style={{ marginTop: 14 }}>
-        <h3>All transactions ({sorted.length})</h3>
-        {sorted.length === 0 && <div className="empty">No transactions yet.</div>}
-        <div className="list">
-          {sorted.map((t) => (
-            <div className="item" key={t.id}>
-              <div className="left">
-                <span className="desc">{t.desc}</span>
-                <span className="meta">
-                  <span className="pill">{t.category}</span> · {t.date}
-                </span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <span className={'amount ' + t.type}>
-                  {t.type === 'income' ? '+' : '−'}
-                  {fmt(t.amount)}
-                </span>
-                <button className="btn danger" onClick={() => remove(t.id)}>Delete</button>
-              </div>
-            </div>
-          ))}
-        </div>
+      <div className="sheet-wrap">
+        <table className="sheet">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Description</th>
+              <th>Type</th>
+              <th>Category</th>
+              <th className="num">Amount</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.length === 0 && (
+              <tr>
+                <td colSpan={6} className="empty">No rows yet. Hit “+ Add row”.</td>
+              </tr>
+            )}
+            {sorted.map((t) => (
+              <tr key={t.id} className={t.type === 'income' ? 'r-income' : ''}>
+                <td>
+                  <input type="date" value={t.date} onChange={(e) => editCell(t.id, 'date', e.target.value)} />
+                </td>
+                <td>
+                  <input value={t.desc} placeholder="describe…" onChange={(e) => editCell(t.id, 'desc', e.target.value)} />
+                </td>
+                <td>
+                  <select value={t.type} onChange={(e) => editCell(t.id, 'type', e.target.value)}>
+                    <option value="expense">Expense</option>
+                    <option value="income">Income</option>
+                  </select>
+                </td>
+                <td>
+                  <select value={t.category} onChange={(e) => editCell(t.id, 'category', e.target.value)}>
+                    {CATEGORIES.map((c) => (
+                      <option key={c}>{c}</option>
+                    ))}
+                  </select>
+                </td>
+                <td className="num">
+                  <input
+                    type="number"
+                    step="0.01"
+                    className={'cell-num ' + t.type}
+                    defaultValue={t.amount}
+                    key={t.id + '-' + t.amount}
+                    onBlur={(e) => commitAmount(t.id, e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && e.target.blur()}
+                  />
+                </td>
+                <td className="rowtools">
+                  <button title="Duplicate" onClick={() => duplicate(t.id)}>⧉</button>
+                  <button title="Delete" onClick={() => remove(t.id)}>✕</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colSpan={4} style={{ textAlign: 'right', color: 'var(--text-dim)' }}>Totals</td>
+              <td className="num">
+                <span className="amount income">+{fmt(totalIn)}</span>{' '}
+                <span className="amount expense">−{fmt(totalOut)}</span>
+              </td>
+              <td></td>
+            </tr>
+          </tfoot>
+        </table>
       </div>
-    </>
+    </div>
   )
 }
 
@@ -412,6 +458,135 @@ function Advisor({ state, totals }) {
         </button>
       </div>
     </div>
+  )
+}
+
+function Opportunities({ state, totals, update }) {
+  const saved = state.opportunities || { profile: { skills: '', hours: '10', budget: '0', location: '' }, ideas: [] }
+  const [profile, setProfile] = useState(saved.profile)
+  const [ideas, setIdeas] = useState(saved.ideas)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const hasKey = !!state.apiKey
+
+  const persist = (nextIdeas, nextProfile) =>
+    update({ opportunities: { profile: nextProfile ?? profile, ideas: nextIdeas ?? ideas } })
+
+  const setP = (patch) => {
+    const next = { ...profile, ...patch }
+    setProfile(next)
+    persist(undefined, next)
+  }
+
+  const generate = async () => {
+    if (busy) return
+    setError('')
+    setBusy(true)
+    try {
+      const prompt =
+        `Generate 6 concrete, realistic money-making opportunities for this person. ` +
+        `Mix side hustles and online/internet income. Prioritize ones that fit their skills, time, and budget.\n\n` +
+        `PROFILE:\n` +
+        `- Skills/interests: ${profile.skills || 'general, open to anything'}\n` +
+        `- Time available: ${profile.hours || '?'} hours/week\n` +
+        `- Startup budget: $${profile.budget || '0'}\n` +
+        `- Location: ${profile.location || 'unspecified'}\n` +
+        `- Current monthly net: ${fmt(totals.net)}\n\n` +
+        `Return ONLY a JSON array, no prose. Each item must be an object with exactly these keys: ` +
+        `"title" (string), "type" ("side hustle" or "online"), "potential" (realistic monthly $ range as a string e.g. "$300-800"), ` +
+        `"effort" ("low"|"medium"|"high"), "startup" (string, e.g. "$0" or "$50 + a laptop"), ` +
+        `"why" (one sentence on why it fits this person), ` +
+        `"steps" (array of 3-5 short string steps to start this week).`
+
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': state.apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 2048,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+      })
+      if (!res.ok) throw new Error(`API ${res.status}: ${(await res.text()).slice(0, 300)}`)
+      const data = await res.json()
+      const raw = data?.content?.map((b) => b.text).join('') || '[]'
+      const match = raw.match(/\[[\s\S]*\]/)
+      const parsed = JSON.parse(match ? match[0] : raw)
+      setIdeas(parsed)
+      persist(parsed)
+    } catch (e) {
+      setError('Could not parse ideas — ' + (e.message || String(e)))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const effortColor = (e) => (e === 'low' ? 'var(--green)' : e === 'high' ? 'var(--red)' : 'var(--amber)')
+
+  return (
+    <>
+      <div className="card" style={{ marginTop: 18 }}>
+        <h3>Find money-making opportunities</h3>
+        {!hasKey && (
+          <div className="callout" style={{ marginBottom: 12 }}>
+            Add your <b>Anthropic API key</b> in <b>Settings</b> to generate ideas.
+          </div>
+        )}
+        <div className="row">
+          <div className="field" style={{ flex: 3, minWidth: 200 }}>
+            <label>Your skills / interests</label>
+            <input value={profile.skills} onChange={(e) => setP({ skills: e.target.value })} placeholder="e.g. driving, writing, Excel, video editing, lawn care" />
+          </div>
+          <div className="field">
+            <label>Hours / week</label>
+            <input type="number" value={profile.hours} onChange={(e) => setP({ hours: e.target.value })} />
+          </div>
+          <div className="field">
+            <label>Startup budget ($)</label>
+            <input type="number" value={profile.budget} onChange={(e) => setP({ budget: e.target.value })} />
+          </div>
+          <div className="field">
+            <label>Location</label>
+            <input value={profile.location} onChange={(e) => setP({ location: e.target.value })} placeholder="e.g. Pittsburgh, PA" />
+          </div>
+        </div>
+        <div className="row" style={{ marginTop: 12 }}>
+          <button className="btn" disabled={!hasKey || busy} onClick={generate}>
+            {busy ? 'Finding opportunities…' : ideas.length ? 'Regenerate ideas' : 'Generate ideas'}
+          </button>
+        </div>
+        {error && <div className="callout" style={{ marginTop: 12, color: 'var(--red)' }}>{error}</div>}
+      </div>
+
+      {ideas.length > 0 && (
+        <div className="grid cols-2">
+          {ideas.map((idea, i) => (
+            <div className="card" key={i}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                <span className="desc" style={{ fontSize: 16, fontWeight: 700 }}>{idea.title}</span>
+                <span className="pill">{idea.type}</span>
+              </div>
+              <div style={{ display: 'flex', gap: 14, margin: '10px 0', flexWrap: 'wrap' }}>
+                <span className="muted">💵 <b style={{ color: 'var(--green)' }}>{idea.potential}</b>/mo</span>
+                <span className="muted">⚡ effort <b style={{ color: effortColor(idea.effort) }}>{idea.effort}</b></span>
+                <span className="muted">🏁 {idea.startup}</span>
+              </div>
+              <p className="muted" style={{ fontStyle: 'italic', marginTop: 0 }}>{idea.why}</p>
+              <ol style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: 13.5, lineHeight: 1.6 }}>
+                {(idea.steps || []).map((s, j) => (
+                  <li key={j}>{s}</li>
+                ))}
+              </ol>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
   )
 }
 

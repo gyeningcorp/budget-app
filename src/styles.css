@@ -126,3 +126,33 @@ button.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .callout b { color: var(--text); }
 .foot { text-align: center; color: var(--text-dim); font-size: 12px; margin-top: 30px; }
 a { color: var(--green); }
+
+/* Spreadsheet */
+.sheet-wrap { overflow-x: auto; margin-top: 12px; border: 1px solid var(--border); border-radius: 10px; }
+table.sheet { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 13.5px; }
+table.sheet th {
+  text-align: left; font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase;
+  color: var(--text-dim); font-weight: 600; padding: 10px 8px; background: var(--bg-elev);
+  border-bottom: 1px solid var(--border); position: sticky; top: 0;
+}
+table.sheet th.num, table.sheet td.num { text-align: right; }
+table.sheet td { border-bottom: 1px solid var(--border); padding: 0; vertical-align: middle; }
+table.sheet tbody tr:hover { background: rgba(29, 179, 104, 0.05); }
+table.sheet tr.r-income { background: rgba(29, 179, 104, 0.06); }
+table.sheet input, table.sheet select {
+  border: 0; background: transparent; border-radius: 0; padding: 11px 8px; font-size: 13.5px;
+  width: 100%; color: var(--text);
+}
+table.sheet input:focus, table.sheet select:focus {
+  outline: 2px solid var(--green); outline-offset: -2px; background: var(--bg-elev);
+}
+table.sheet input.cell-num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+table.sheet input.cell-num.income { color: var(--green); }
+table.sheet input.cell-num.expense { color: var(--text); }
+td.rowtools { white-space: nowrap; padding: 0 6px; text-align: center; }
+td.rowtools button {
+  background: transparent; border: 0; color: var(--text-dim); cursor: pointer;
+  font-size: 14px; padding: 6px 6px; border-radius: 6px;
+}
+td.rowtools button:hover { color: var(--text); background: var(--bg-elev); }
+table.sheet tfoot td { padding: 12px 8px; font-weight: 700; border-top: 1px solid var(--border); }
