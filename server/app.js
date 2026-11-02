@@ -7,9 +7,10 @@ import { randomBytes, randomUUID, createHash, createCipheriv, createDecipheriv }
 import { mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { registerBilling } from './billing.js'
 import { emptyShared, applyOps } from '../shared/sync.js'
 const hash = value => createHash('sha256').update(value).digest('hex')
-export async function createApp({ databasePath, baseURL, secret, production = false, aiFetch = fetch }) {
+export async function createApp({ databasePath, baseURL, secret, production = false, aiFetch = fetch, billFetch = fetch }) {
   if (!secret || secret.length < 32) throw new Error('A stable AUTH_SECRET of at least 32 characters is required.')
   mkdirSync(dirname(databasePath), { recursive: true })
   const db = new DatabaseSync(databasePath)
@@ -31,6 +32,7 @@ export async function createApp({ databasePath, baseURL, secret, production = fa
   app.set('trust proxy', 1)
   app.use((req, res, next) => { res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('X-Frame-Options', 'DENY'); res.setHeader('Referrer-Policy', 'no-referrer'); if (req.path.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store'); next() })
   app.all('/api/auth/{*any}', toNodeHandler(auth))
+  app.use('/api/family/billing/extract', express.json({ limit: '8mb' }))
   app.use(express.json({ limit: '2mb' }))
   app.get('/api/health', (req, res) => res.json({ ok: true, service: 'family-hub' }))
   const limits = new Map()
@@ -90,20 +92,24 @@ export async function createApp({ databasePath, baseURL, secret, production = fa
     else { if (!key.startsWith('sk-ant-') || key.length<20 || key.length>500 || /\s/.test(key)) return res.status(400).json({error:'Enter a valid Anthropic API key.'}); db.prepare('INSERT INTO ai_settings VALUES(?,?) ON CONFLICT(household_id) DO UPDATE SET encrypted_key=excluded.encrypted_key').run(hid,encryptKey(key,hid)) }
     res.json({configured:!!key})
   })
-  app.post('/api/family/ai', needFamily, async (req, res, next) => {
+  async function callClaude(hid, payload) {
+    const setting=db.prepare('SELECT encrypted_key FROM ai_settings WHERE household_id=?').get(hid)
+    if (!setting) throw Object.assign(new Error('Ask the household owner to add a Claude API key in Family settings.'),{status:400})
+    const day=new Date().toISOString().slice(0,10), usage=db.prepare('SELECT requests FROM ai_usage WHERE household_id=? AND day=?').get(hid,day)
+    if ((usage?.requests || 0)>=100) throw Object.assign(new Error('Your household reached its 100-request daily AI limit. Try again tomorrow.'),{status:429})
+    db.prepare('INSERT INTO ai_usage VALUES(?,?,1) ON CONFLICT(household_id,day) DO UPDATE SET requests=requests+1').run(hid,day)
+    const upstream=await aiFetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','anthropic-version':'2023-06-01','x-api-key':decryptKey(setting.encrypted_key,hid)},body:JSON.stringify({...payload,model:process.env.CLAUDE_MODEL || 'claude-sonnet-4-6',max_tokens:Math.min(Math.max(Number(payload.max_tokens)||1024,1),2048)}),signal:AbortSignal.timeout(45000)})
+    if (!upstream.ok) throw Object.assign(new Error(`Claude could not complete the request (HTTP ${upstream.status}). Check the API key, credits and model access in Anthropic.`),{status:upstream.status===401?400:502})
+    return upstream.json()
+  }
+  app.post('/api/family/ai', needFamily, async (req,res) => {
     try {
-      const hid=req.member.household_id, setting=db.prepare('SELECT encrypted_key FROM ai_settings WHERE household_id=?').get(hid)
-      if (!setting) return res.status(400).json({error:'Ask the household owner to add a Claude API key in Family settings.'})
       const {messages,system,tools}=req.body
       if (!Array.isArray(messages) || messages.length<1 || messages.length>60 || JSON.stringify(messages).length>150000 || (system&&typeof system!=='string') || (system&&system.length>30000) || (tools&&(!Array.isArray(tools)||tools.length>20))) return res.status(400).json({error:'The AI conversation is too long. Start a new conversation.'})
-      const day=new Date().toISOString().slice(0,10), usage=db.prepare('SELECT requests FROM ai_usage WHERE household_id=? AND day=?').get(hid,day)
-      if ((usage?.requests || 0)>=100) return res.status(429).json({error:'Your household reached its 100-request daily AI limit. Try again tomorrow.'})
-      db.prepare('INSERT INTO ai_usage VALUES(?,?,1) ON CONFLICT(household_id,day) DO UPDATE SET requests=requests+1').run(hid,day)
-      const upstream=await aiFetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','anthropic-version':'2023-06-01','x-api-key':decryptKey(setting.encrypted_key,hid)},body:JSON.stringify({model:process.env.CLAUDE_MODEL || 'claude-sonnet-4-6',max_tokens:Math.min(Math.max(Number(req.body.max_tokens)||1024,1),2048),messages,...(system?{system}:{}),...(tools?{tools}:{})}),signal:AbortSignal.timeout(45000)})
-      if (!upstream.ok) return res.status(upstream.status===401?400:502).json({error:`Claude could not complete the request (HTTP ${upstream.status}). Check the API key, credits and model access in Anthropic.`})
-      res.json(await upstream.json())
-    } catch (error) { next(error) }
+      res.json(await callClaude(req.member.household_id,{messages,system,tools,max_tokens:req.body.max_tokens}))
+    } catch(error) { res.status(error.status||502).json({error:error.status?error.message:'The AI request could not be completed. Please try again.'}) }
   })
+  const billing=registerBilling(app,{db,needFamily,needOwner,encryptKey,decryptKey,callClaude,billFetch})
   app.get('/api/family/state', needFamily, (req, res) => res.json(snapshot(req.member.household_id)))
   app.post('/api/family/state', needFamily, (req, res) => {
     const { id, ops } = req.body
@@ -124,5 +130,5 @@ export async function createApp({ databasePath, baseURL, secret, production = fa
   app.use(express.static(dist, { index: false, maxAge: '1h' }))
   app.get('/{*any}', (req, res) => { res.setHeader('Cache-Control', 'no-cache'); res.sendFile(resolve(dist, 'index.html')) })
   app.use((error, req, res, next) => { console.error('Request failed:', error.code || error.name); res.status(error.status || 500).json({ error: 'The request could not be completed. Please try again.' }) })
-  return { app, auth, db, close: () => db.close() }
+  return { app, auth, db, checkDueConnections: billing.checkDueConnections, close: () => db.close() }
 }

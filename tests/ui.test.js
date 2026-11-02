@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 const origin='http://127.0.0.1:3000', dir=mkdtempSync(join(tmpdir(),'family-ui-'))
-const service=await createApp({databasePath:join(dir,'app.sqlite'),baseURL:origin,secret:'test-only-ui-integration-long-random-secret'})
+const service=await createApp({databasePath:join(dir,'app.sqlite'),baseURL:origin,secret:'test-only-ui-integration-long-random-secret',aiFetch:async()=>Response.json({content:[{type:'text',text:JSON.stringify({providerName:'Columbia Gas of Pennsylvania',amount:85.42,due:'2026-11-23',statementDate:'2026-11-02',accountLast4:'1234',notes:''})}]})})
 const server=service.app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));const base=`http://127.0.0.1:${server.address().port}`
 const bundled=await build({entryPoints:['src/main.jsx'],absWorkingDir:process.cwd(),bundle:true,write:false,format:'iife',loader:{'.css':'empty'},define:{'process.env.NODE_ENV':'"production"'},jsx:'automatic'})
 const errors=[], windows=[]
@@ -29,6 +29,13 @@ try {
  await click(owner,'Paychecks');await click(owner,'+ Add bill');fill(owner,'Bill name','Electric');fill(owner,'Due date','2026-11-16');fill(owner,'Amount ($)','80');await submit(owner);fill(owner,'Next payday','2026-11-20');fill(owner,'Money available now ($)','400');await sleep();assert(owner.document.body.textContent.includes('$320.00'));
  await click(owner,'Calendar');fill(owner,'Month','2026-11');await sleep();assert(owner.document.body.textContent.includes('Our coffee date'));assert(owner.document.body.textContent.includes('Electric'));
  await until(()=>owner.document.body.textContent.includes('Family is up to date'));
- console.log('PASS: two separate browser DOMs signed up, joined by invitation, shared date plans and grocery updates, meals-to-groceries, paycheck math, calendar links; no real API calls.')
+ await owner.fetch('/api/family/ai-key',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key:'sk-ant-fake-only-ui-test-billing-key'})});await click(owner,'Family');await until(()=>owner.document.body.textContent.includes('Connected ·'));
+ await click(owner,'Bill accounts');await until(()=>owner.document.body.textContent.includes('No automatic connection'));for(const provider of ['Palmetto','Columbia Gas','American Water','T-Mobile'])assert(findButton(owner,`Connect ${provider}`));
+ await click(owner,'Import Columbia Gas bill');fill(owner,'Or paste the bill summary','Columbia Gas total due $85.42 November 23 2026');const approve=[...owner.document.querySelectorAll('label')].find(x=>x.textContent.includes('Send this statement to Anthropic')).querySelector('input');approve.click();await sleep();await click(owner,'Read statement with Claude');await until(()=>owner.document.querySelector('input[type=number]')?.value==='85.42');
+ assert(findButton(owner,'Save reviewed bill').disabled);const review=[...owner.document.querySelectorAll('label')].find(x=>x.textContent.includes('I verified the provider')).querySelector('input');review.click();await sleep();await click(owner,'Save reviewed bill');await until(()=>owner.document.body.textContent.includes('Family is up to date'));
+ await click(owner,'Paychecks');assert(owner.document.body.textContent.includes('Columbia Gas'));assert(owner.document.body.textContent.includes('$85.42'));
+ await click(owner,'Bill accounts');await click(owner,'Import Columbia Gas bill');fill(owner,'Total amount due ($)','90');fill(owner,'Payment due date','2026-11-23');fill(owner,'Account ending (last 4 only, optional)','1234');[...owner.document.querySelectorAll('label')].find(x=>x.textContent.includes('I verified the provider')).querySelector('input').click();await sleep();await click(owner,'Save reviewed bill');await until(()=>owner.document.body.textContent.includes('Family is up to date'));
+ const actual=await (await owner.fetch('/api/family/state')).json();assert.equal(actual.state.bills.filter(b=>b.providerId==='columbia-gas').length,1);assert.equal(actual.state.bills.find(b=>b.providerId==='columbia-gas').amount,90);
+ console.log('PASS: two separate browser DOMs signed up, joined by invitation, shared date plans and grocery updates, meals-to-groceries, paycheck math, calendar links; reviewed bill extraction, duplicate statement updates; no real API calls.')
  assert.deepEqual(errors,[])
 } finally {for(const w of windows)w.close();await new Promise(r=>server.close(r));service.close();rmSync(dir,{recursive:true,force:true})}

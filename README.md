@@ -20,6 +20,9 @@ The existing GitHub Pages app remains usable on a single device. Open **Family**
 - Projects with owners, due dates, planned costs, status and checklists.
 - Date nights with ideas, dates, time, childcare, booking notes, planned/actual costs and memories. Claude suggestions are estimates, not verified live listings or bookings.
 - Shared groceries, meal plans and ingredient-to-shopping-list actions.
+- Bill accounts for Palmetto, Columbia Gas (Pennsylvania), American Water and T-Mobile. Provider sign-in links are shortcuts, not data connections. Upload a PDF/photo or paste a bill summary, approve sending it to Anthropic, and review the extracted facts before saving. Missing dates/amounts remain blank. A second import for the same provider, account ending and due date updates that bill instead of duplicating it.
+- Optional Arcadia connector: owner-supplied API credentials are validated and encrypted. The owner checks coverage, authorizes ongoing imports and completes Arcadia Connect on its secure site. The app verifies statements by both an opaque household correlation ID and provider name, then imports the latest USD statement per account. It does not declare a connection complete when a URL is generated. Actual provider coverage, pricing and product activation require the user's live Arcadia account; these are not verified by mocked tests. No Arcadia subscription is created or purchased by the app.
+- Connected statement checks run every 30 minutes for connections last checked at least 6 hours earlier. Connections can be paused in the app; pausing does not revoke credentials or delete retained data in Arcadia. Manage vendor permissions separately there. Only current statements are imported, not historical balances as unpaid bills. Payment status is entered manually.
 - Paycheck planner showing unpaid bills due through the next payday and remaining entered funds. Bill payments and date expenses do not automatically create ledger transactions.
 - Calendar links for projects, date nights, meals and bills; `.ics` exports use all-day entries with times in descriptions.
 
@@ -46,7 +49,7 @@ AUTH_SECRET='<random stable secret at least 32 characters>' npm start
 
 The server defaults to http://127.0.0.1:3000 and `./data/family.sqlite`. For frontend-only development, `npm run dev` starts Vite; family accounts require the backend.
 
-Tests cover real authentication and cookie sessions, household isolation, invitation expiry/revocation/reuse, member removal, independent edits, conflict detection, idempotent retries, server restarts, encrypted key handling and AI rate limits. The UI integration uses two separate browser DOMs and an actual temporary backend, including date plans, groceries, meals and paycheck math. AI calls in tests use a fake key and a mocked upstream, so they never incur API charges.
+Tests cover real authentication and cookie sessions, household isolation, invitation expiry/revocation/reuse, member removal, independent edits, conflict detection, idempotent retries, server restarts, encrypted key handling and AI rate limits. The UI integration uses two separate browser DOMs and an actual temporary backend, including date plans, groceries, meals and paycheck math. Billing tests additionally cover consent, file validation, encrypted connector secrets, coverage responses, approved authorization hosts, cross-household filtering, latest-statement selection, paused connections and duplicate statement imports. API calls in tests use fake credentials and a mocked upstream, so they never incur API charges.
 
 ## Deployment
 

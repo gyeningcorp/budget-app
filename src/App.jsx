@@ -4,6 +4,7 @@ import useHousehold from './useHousehold'
 import Account from './Account'
 import DateNights from './DateNights'
 import HomePlanning from './HomePlanning'
+import BillAccounts from './BillAccounts'
 import { claudeRequest } from './claude'
 import { sharedState } from '../shared/sync'
 import { dateKey } from './family.js'
@@ -29,6 +30,7 @@ const SEED = {
   groceries: [],
   meals: [],
   bills: [],
+  billAccounts: [],
   paycheckPlan: {},
   apiKey: '',
   bank: { url: '', secret: '' },
@@ -319,7 +321,7 @@ export default function App() {
       <div className="family-connection"><span>{sync.account?.household ? sync.account.household.name : "Your family, in one place"}</span><button className="btn ghost" onClick={() => setTab('Family')}>{sync.account ? 'Family settings' : 'Family sign in'}</button></div>
       {sync.conflict && <p role="alert" className="family-error">A simultaneous edit needs your review. <button className="btn ghost" onClick={() => setTab('Family')}>Review changes</button></p>}
       <nav className="tabs" aria-label="App sections">
-        {['Dashboard', 'Calendar', 'Date nights', 'Projects', 'Groceries', 'Meals', 'Paychecks', 'Ideas', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Family', 'Settings'].map((t) => (
+        {['Dashboard', 'Calendar', 'Date nights', 'Projects', 'Groceries', 'Meals', 'Paychecks', 'Bill accounts', 'Ideas', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Family', 'Settings'].map((t) => (
           <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>
             {t}
           </button>
@@ -328,6 +330,7 @@ export default function App() {
 
       {['Calendar', 'Projects', 'Ideas'].includes(tab) && <Family tab={tab} state={state} setState={setState} onNavigate={setTab} />}
       {tab === 'Family' && <Account sync={sync} />}
+      {tab === 'Bill accounts' && <BillAccounts sync={sync} onNavigate={setTab} />}
       {tab === 'Date nights' && <DateNights state={state} setState={setState} />}
       {['Groceries', 'Meals', 'Paychecks'].includes(tab) && <HomePlanning tab={tab} state={state} setState={setState} />}
       {tab === 'Dashboard' && <Dashboard totals={totals} transactions={state.transactions} />}
@@ -984,7 +987,7 @@ function Settings({ state, update, setState, openFamily }) {
 }
 
 // --- In-app AI assistant (talks + edits your data) -------------------------
-const PAGES = ['Dashboard', 'Calendar', 'Date nights', 'Projects', 'Groceries', 'Meals', 'Paychecks', 'Ideas', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Family', 'Settings']
+const PAGES = ['Dashboard', 'Calendar', 'Date nights', 'Projects', 'Groceries', 'Meals', 'Paychecks', 'Bill accounts', 'Ideas', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Family', 'Settings']
 
 // Tools the model can call to mutate the ledger / budgets / navigate.
 const AI_TOOLS = [

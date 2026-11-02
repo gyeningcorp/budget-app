@@ -1,4 +1,4 @@
-export const ARRAY_FIELDS = ['transactions', 'familyEvents', 'familyProjects', 'dateNights', 'groceries', 'meals', 'bills']
+export const ARRAY_FIELDS = ['transactions', 'familyEvents', 'familyProjects', 'dateNights', 'groceries', 'meals', 'bills', 'billAccounts']
 export const MAP_FIELDS = ['budgets', 'paycheckPlan']
 export const SHARED_FIELDS = [...ARRAY_FIELDS, ...MAP_FIELDS]
 const unsafe = key => ['__proto__', 'constructor', 'prototype'].includes(key)
@@ -53,6 +53,7 @@ export function validateRecord(field, value) {
   if (field === 'dateNights') valid = text('title') && day('date') && amount('budget') && amount('spent') && text('notes') && ['Idea', 'Planned', 'Done', 'Cancelled'].includes(value.status)
   if (field === 'groceries') valid = text('name') && typeof value.checked === 'boolean'
   if (field === 'meals') valid = text('title') && day('date') && text('slot') && text('ingredients')
+  if (field === 'billAccounts') valid = text('providerId') && text('nickname') && (value.accountLast4 === '' || /^[a-zA-Z0-9]{4}$/.test(value.accountLast4)) && text('notes')
   if (field === 'bills') valid = text('title') && day('due') && amount('amount') && typeof value.paid === 'boolean'
   if (field === 'budgets') valid = typeof value === 'number' && Number.isFinite(value) && value >= 0
   if (!valid) throw new Error(`Invalid ${field} record. Check the imported data.`)
