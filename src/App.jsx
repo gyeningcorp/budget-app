@@ -1,10 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Family from './Family'
+import useHousehold from './useHousehold'
+import Account from './Account'
+import DateNights from './DateNights'
+import HomePlanning from './HomePlanning'
+import { claudeRequest } from './claude'
+import { sharedState } from '../shared/sync'
+import { dateKey } from './family.js'
 
 const LS_KEY = 'hog-budget-v1'
 const CATEGORIES = ['Income', 'Housing', 'Food', 'Transport', 'Utilities', 'Health', 'Fun', 'Savings', 'Other']
 
-const todayISO = () => new Date().toISOString().slice(0, 10)
+const todayISO = dateKey
 const fmt = (n) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(n || 0)
 
@@ -18,6 +25,11 @@ const SEED = {
   budgets: { Food: 600, Transport: 250, Fun: 200, Utilities: 300 },
   familyEvents: [],
   familyProjects: [],
+  dateNights: [],
+  groceries: [],
+  meals: [],
+  bills: [],
+  paycheckPlan: {},
   apiKey: '',
   bank: { url: '', secret: '' },
 }
@@ -272,12 +284,9 @@ function loadState() {
 }
 
 export default function App() {
-  const [tab, setTab] = useState('Dashboard')
-  const [state, setState] = useState(loadState)
-
-  useEffect(() => {
-    localStorage.setItem(LS_KEY, JSON.stringify(state))
-  }, [state])
+  const [tab, setTab] = useState(() => location.hash.includes('invite=') ? 'Family' : 'Dashboard')
+  const sync = useHousehold(loadState, LS_KEY)
+  const { state, setState } = sync
 
   const update = (patch) => setState((s) => ({ ...s, ...patch }))
 
@@ -302,28 +311,33 @@ export default function App() {
           <div className="mark">G</div>
           <div>
             <h1>House of Gyening · Family Hub</h1>
-            <span>Budget, plans & family life · saved on this device</span>
+            <span>{sync.status}</span>
           </div>
         </div>
       </header>
 
-      <nav className="tabs">
-        {['Dashboard', 'Calendar', 'Projects', 'Ideas', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Settings'].map((t) => (
+      <div className="family-connection"><span>{sync.account?.household ? sync.account.household.name : "Your family, in one place"}</span><button className="btn ghost" onClick={() => setTab('Family')}>{sync.account ? 'Family settings' : 'Family sign in'}</button></div>
+      {sync.conflict && <p role="alert" className="family-error">A simultaneous edit needs your review. <button className="btn ghost" onClick={() => setTab('Family')}>Review changes</button></p>}
+      <nav className="tabs" aria-label="App sections">
+        {['Dashboard', 'Calendar', 'Date nights', 'Projects', 'Groceries', 'Meals', 'Paychecks', 'Ideas', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Family', 'Settings'].map((t) => (
           <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>
             {t}
           </button>
         ))}
       </nav>
 
-      {['Calendar', 'Projects', 'Ideas'].includes(tab) && <Family tab={tab} state={state} setState={setState} />}
+      {['Calendar', 'Projects', 'Ideas'].includes(tab) && <Family tab={tab} state={state} setState={setState} onNavigate={setTab} />}
+      {tab === 'Family' && <Account sync={sync} />}
+      {tab === 'Date nights' && <DateNights state={state} setState={setState} />}
+      {['Groceries', 'Meals', 'Paychecks'].includes(tab) && <HomePlanning tab={tab} state={state} setState={setState} />}
       {tab === 'Dashboard' && <Dashboard totals={totals} transactions={state.transactions} />}
       {tab === 'Transactions' && <Transactions state={state} setState={setState} />}
       {tab === 'Budgets' && <Budgets state={state} update={update} byCat={totals.byCat} />}
       {tab === 'Advisor' && <Advisor state={state} totals={totals} />}
       {tab === 'Opportunities' && <Opportunities state={state} totals={totals} update={update} />}
-      {tab === 'Settings' && <Settings state={state} update={update} setState={setState} />}
+      {tab === 'Settings' && <Settings state={state} update={update} setState={setState} openFamily={() => setTab('Family')} />}
 
-      <p className="foot">House of Gyening · Budget — built with React + Vite. No server, no tracking.</p>
+      <p className="foot">House of Gyening · Family Hub · Your household, together.</p>
 
       <Assistant state={state} setState={setState} totals={totals} page={tab} setTab={setTab} />
     </div>
@@ -654,7 +668,7 @@ function Advisor({ state, totals }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
-  const hasKey = !!state.apiKey
+  const hasKey = !!(state._sharedAI || state.apiKey)
 
   const buildContext = () => {
     const lines = [
@@ -682,15 +696,7 @@ function Advisor({ state, totals }) {
     setInput('')
     setBusy(true)
     try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': state.apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
-        body: JSON.stringify({
+      const res = await claudeRequest(state, {
           model: 'claude-sonnet-4-6',
           max_tokens: 1024,
           system:
@@ -699,8 +705,7 @@ function Advisor({ state, totals }) {
             'flag overspending, and never invent transactions.\n\nUSER FINANCIAL SNAPSHOT:\n' +
             buildContext(),
           messages: next.map((m) => ({ role: m.role, content: m.content })),
-        }),
-      })
+        })
       if (!res.ok) {
         const body = await res.text()
         throw new Error(`API ${res.status}: ${body.slice(0, 300)}`)
@@ -720,8 +725,7 @@ function Advisor({ state, totals }) {
       <h3>AI money advisor</h3>
       {!hasKey && (
         <div className="callout" style={{ marginBottom: 12 }}>
-          Add your <b>Anthropic API key</b> in <b>Settings</b> to enable the advisor. Your key is stored only in this
-          browser (localStorage) and sent directly to Anthropic — never to any server of ours.
+          Add your <b>Anthropic API key</b> in <b>Family settings</b> (shared app) or <b>Settings</b> (device app) to enable the advisor. The shared app stores your household key encrypted on the server and sends AI requests to Anthropic. Device-only keys are saved in this browser.
         </div>
       )}
 
@@ -769,7 +773,7 @@ function Opportunities({ state, totals, update }) {
   const [ideas, setIdeas] = useState(saved.ideas)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const hasKey = !!state.apiKey
+  const hasKey = !!(state._sharedAI || state.apiKey)
 
   const persist = (nextIdeas, nextProfile) =>
     update({ opportunities: { profile: nextProfile ?? profile, ideas: nextIdeas ?? ideas } })
@@ -800,20 +804,11 @@ function Opportunities({ state, totals, update }) {
         `"why" (one sentence on why it fits this person), ` +
         `"steps" (array of 3-5 short string steps to start this week).`
 
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': state.apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
-        body: JSON.stringify({
+      const res = await claudeRequest(state, {
           model: 'claude-sonnet-4-6',
           max_tokens: 2048,
           messages: [{ role: 'user', content: prompt }],
-        }),
-      })
+        })
       if (!res.ok) throw new Error(`API ${res.status}: ${(await res.text()).slice(0, 300)}`)
       const data = await res.json()
       const raw = data?.content?.map((b) => b.text).join('') || '[]'
@@ -836,7 +831,7 @@ function Opportunities({ state, totals, update }) {
         <h3>Find money-making opportunities</h3>
         {!hasKey && (
           <div className="callout" style={{ marginBottom: 12 }}>
-            Add your <b>Anthropic API key</b> in <b>Settings</b> to generate ideas.
+            Add your <b>Anthropic API key</b> in <b>Family settings</b> (shared app) or <b>Settings</b> (device app) to generate ideas.
           </div>
         )}
         <div className="row">
@@ -892,7 +887,7 @@ function Opportunities({ state, totals, update }) {
   )
 }
 
-function Settings({ state, update, setState }) {
+function Settings({ state, update, setState, openFamily }) {
   const [key, setKey] = useState(state.apiKey || '')
   const [saved, setSaved] = useState(false)
   const [bank, setBank] = useState(state.bank || { url: '', secret: '' })
@@ -911,7 +906,7 @@ function Settings({ state, update, setState }) {
   }
 
   const exportData = () => {
-    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' })
+    const blob = new Blob([JSON.stringify(sharedState(state), null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -930,7 +925,8 @@ function Settings({ state, update, setState }) {
   return (
     <>
       <div className="card" style={{ marginTop: 18 }}>
-        <h3>Anthropic API key</h3>
+        <h3>{state._cloud ? 'Shared Claude API key' : 'Anthropic API key'}</h3>
+        {state._cloud ? <><p>Configure one key for everyone in your household under Family settings.</p><button className="btn" onClick={openFamily}>Open family AI settings</button></> : <>
         <div className="callout" style={{ marginBottom: 12 }}>
           Stored only in <b>this browser</b>. Requests go straight from your browser to Anthropic. Get a key at{' '}
           <b>console.anthropic.com</b>.
@@ -941,7 +937,7 @@ function Settings({ state, update, setState }) {
             <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-ant-..." />
           </div>
           <button className="btn" onClick={save}>{saved ? 'Saved ✓' : 'Save key'}</button>
-        </div>
+        </div></>}
       </div>
 
       <div className="card" style={{ marginTop: 14 }}>
@@ -977,10 +973,10 @@ function Settings({ state, update, setState }) {
         <h3>Your data</h3>
         <div className="row">
           <button className="btn ghost" onClick={exportData}>Export JSON</button>
-          <button className="btn danger" onClick={reset}>Erase everything</button>
+          <button className="btn danger" onClick={reset}>Clear this device</button>
         </div>
         <p className="muted" style={{ marginTop: 10 }}>
-          Everything lives in your browser’s localStorage. Clearing browser data removes it.
+          {state._cloud ? 'Household data is stored on the family server. Clearing this device does not delete the shared household. Exports contain shared plans and budget records; API keys are excluded.' : 'Data is stored on this device until you import it into a family account.'}
         </p>
       </div>
     </>
@@ -988,7 +984,7 @@ function Settings({ state, update, setState }) {
 }
 
 // --- In-app AI assistant (talks + edits your data) -------------------------
-const PAGES = ['Dashboard', 'Calendar', 'Projects', 'Ideas', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Settings']
+const PAGES = ['Dashboard', 'Calendar', 'Date nights', 'Projects', 'Groceries', 'Meals', 'Paychecks', 'Ideas', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Family', 'Settings']
 
 // Tools the model can call to mutate the ledger / budgets / navigate.
 const AI_TOOLS = [
@@ -1131,7 +1127,7 @@ function Assistant({ state, setState, totals, page, setTab }) {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const hasKey = !!state.apiKey
+  const hasKey = !!(state._sharedAI || state.apiKey)
 
   // Live snapshot so tool executors read the latest state during the agent loop.
   const stateRef = useRef(state)
@@ -1179,22 +1175,13 @@ function Assistant({ state, setState, totals, page, setTab }) {
     setBusy(true)
     try {
       for (let step = 0; step < 8; step++) {
-        const res = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': state.apiKey,
-            'anthropic-version': '2023-06-01',
-            'anthropic-dangerous-direct-browser-access': 'true',
-          },
-          body: JSON.stringify({
+        const res = await claudeRequest(state, {
             model: 'claude-sonnet-4-6',
             max_tokens: 1024,
             system: systemPrompt(),
             tools: AI_TOOLS,
             messages,
-          }),
-        })
+          })
         if (!res.ok) throw new Error(`API ${res.status}: ${(await res.text()).slice(0, 300)}`)
         const data = await res.json()
         const blocks = data.content || []
@@ -1250,7 +1237,7 @@ function Assistant({ state, setState, totals, page, setTab }) {
 
           {!hasKey && (
             <div className="callout" style={{ margin: 10 }}>
-              Add your <b>Anthropic API key</b> in <b>Settings</b> to use the assistant.
+              Add your <b>Anthropic API key</b> in <b>Family settings</b> (shared app) or <b>Settings</b> (device app) to use the assistant.
             </div>
           )}
 
