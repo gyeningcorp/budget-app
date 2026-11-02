@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import Family from './Family'
 
 const LS_KEY = 'hog-budget-v1'
 const CATEGORIES = ['Income', 'Housing', 'Food', 'Transport', 'Utilities', 'Health', 'Fun', 'Savings', 'Other']
@@ -15,6 +16,8 @@ const SEED = {
     { id: 't4', desc: 'Gas', amount: 52.1, category: 'Transport', type: 'expense', date: todayISO() },
   ],
   budgets: { Food: 600, Transport: 250, Fun: 200, Utilities: 300 },
+  familyEvents: [],
+  familyProjects: [],
   apiKey: '',
   bank: { url: '', secret: '' },
 }
@@ -298,20 +301,21 @@ export default function App() {
         <div className="brand">
           <div className="mark">G</div>
           <div>
-            <h1>House of Gyening · Budget</h1>
-            <span>Local-first · your data never leaves your browser</span>
+            <h1>House of Gyening · Family Hub</h1>
+            <span>Budget, plans & family life · saved on this device</span>
           </div>
         </div>
       </header>
 
       <nav className="tabs">
-        {['Dashboard', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Settings'].map((t) => (
+        {['Dashboard', 'Calendar', 'Projects', 'Ideas', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Settings'].map((t) => (
           <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>
             {t}
           </button>
         ))}
       </nav>
 
+      {['Calendar', 'Projects', 'Ideas'].includes(tab) && <Family tab={tab} state={state} setState={setState} />}
       {tab === 'Dashboard' && <Dashboard totals={totals} transactions={state.transactions} />}
       {tab === 'Transactions' && <Transactions state={state} setState={setState} />}
       {tab === 'Budgets' && <Budgets state={state} update={update} byCat={totals.byCat} />}
@@ -984,7 +988,7 @@ function Settings({ state, update, setState }) {
 }
 
 // --- In-app AI assistant (talks + edits your data) -------------------------
-const PAGES = ['Dashboard', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Settings']
+const PAGES = ['Dashboard', 'Calendar', 'Projects', 'Ideas', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Settings']
 
 // Tools the model can call to mutate the ledger / budgets / navigate.
 const AI_TOOLS = [
@@ -1286,3 +1290,4 @@ function Assistant({ state, setState, totals, page, setTab }) {
     </div>
   )
 }
+
