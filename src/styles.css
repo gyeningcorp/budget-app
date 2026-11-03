@@ -222,6 +222,18 @@ table.sheet input:focus, table.sheet select:focus {
 table.sheet input.cell-num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
 table.sheet input.cell-num.income { color: var(--green); }
 table.sheet input.cell-num.expense { color: var(--text); }
+table.budget-sheet td { padding: 5px 6px; }
+table.budget-sheet input,
+table.budget-sheet select {
+  border: 1px solid rgba(56, 245, 167, 0.22);
+  background: rgba(5, 12, 9, 0.72);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+table.budget-sheet input:hover,
+table.budget-sheet select:hover {
+  border-color: rgba(56, 245, 167, 0.45);
+}
 td.rowtools { white-space: nowrap; padding: 0 6px; text-align: center; }
 td.rowtools button {
   background: transparent; border: 0; color: var(--text-dim); cursor: pointer;

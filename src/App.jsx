@@ -639,15 +639,31 @@ function Dashboard({ state, totals, transactions, onNavigate }) {
 }
 
 // Amount cell with its own typing buffer so you can freely type "12.", clear it,
-// etc., while the parent always stores a clean number.
-function AmountCell({ value, type, onCommit }) {
-  const [raw, setRaw] = useState(String(value ?? ''))
+// etc., while updating parent totals live on every keystroke.
+function AmountCell({ value, type, onCommit, ariaLabel }) {
+  const [raw, setRaw] = useState(value === 0 ? '' : String(value ?? ''))
+  const focusedRef = useRef(false)
   useEffect(() => {
-    setRaw(value === 0 ? '' : String(value))
+    if (!focusedRef.current) {
+      setRaw(value === 0 ? '' : String(value ?? ''))
+    }
   }, [value])
+  const handleChange = (e) => {
+    const v = e.target.value
+    setRaw(v)
+    if (v === '') {
+      onCommit(0)
+      return
+    }
+    const n = parseFloat(v)
+    if (!isNaN(n)) onCommit(n)
+  }
   const commit = () => {
+    focusedRef.current = false
     const n = parseFloat(raw)
-    onCommit(isNaN(n) ? 0 : n)
+    const clean = isNaN(n) ? 0 : n
+    onCommit(clean)
+    setRaw(clean === 0 ? '' : String(clean))
   }
   return (
     <input
@@ -655,9 +671,13 @@ function AmountCell({ value, type, onCommit }) {
       step="0.01"
       inputMode="decimal"
       placeholder="0.00"
+      aria-label={ariaLabel}
       className={'cell-num ' + type}
       value={raw}
-      onChange={(e) => setRaw(e.target.value)}
+      onFocus={() => {
+        focusedRef.current = true
+      }}
+      onChange={handleChange}
       onBlur={commit}
       onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
     />
@@ -825,12 +845,15 @@ function Budgets({ state, update, byCat, totals, onNavigate }) {
   const [cat, setCat] = useState('Food')
   const [customCat, setCustomCat] = useState('')
   const [amt, setAmt] = useState('')
+  const [editingId, setEditingId] = useState(null)
   const [itemCat, setItemCat] = useState('Utilities')
   const [customItemCat, setCustomItemCat] = useState('')
   const [itemName, setItemName] = useState('')
   const [itemAmt, setItemAmt] = useState('')
   const [itemActual, setItemActual] = useState('')
   const [itemNotes, setItemNotes] = useState('')
+  const formCardRef = useRef(null)
+  const nameInputRef = useRef(null)
 
   const categories = allCategories(state).filter((c) => c.toLowerCase() !== 'income')
   const entries = categoryBudgets(state, byCat)
@@ -860,6 +883,24 @@ function Budgets({ state, update, byCat, totals, onNavigate }) {
     const nextItems = (state.budgetItems || []).filter((x) => x.category.toLowerCase() !== c.toLowerCase())
     update({ budgets: next, budgetItems: nextItems })
   }
+  const resetLineItemForm = () => {
+    setEditingId(null)
+    setItemName('')
+    setItemAmt('')
+    setItemActual('')
+    setItemNotes('')
+  }
+  const startEditLineItem = (it) => {
+    setEditingId(it.id)
+    setItemCat(it.category || 'Utilities')
+    setCustomItemCat('')
+    setItemName(it.name || '')
+    setItemAmt(String(it.amount ?? 0))
+    setItemActual(String(it.actual ?? 0))
+    setItemNotes(it.notes || '')
+    formCardRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+    setTimeout(() => nameInputRef.current?.focus?.(), 60)
+  }
   const addLineItem = (e) => {
     e.preventDefault()
     const chosen = itemCat === '__custom__' ? canonicalCategory(state, customItemCat) : itemCat
@@ -867,12 +908,21 @@ function Budgets({ state, update, byCat, totals, onNavigate }) {
     const v = parseFloat(itemAmt)
     const act = itemActual === '' ? 0 : parseFloat(itemActual)
     if (!chosen || chosen.toLowerCase() === 'income' || !name || isNaN(v) || v < 0 || isNaN(act) || act < 0) return
-    const item = { id: crypto.randomUUID(), category: chosen, name, amount: v, actual: act, notes: itemNotes.trim() }
-    update({ budgetItems: [...items, item] })
-    setItemName('')
-    setItemAmt('')
-    setItemActual('')
-    setItemNotes('')
+    if (editingId && items.some((x) => x.id === editingId)) {
+      update({
+        budgetItems: items.map((x) =>
+          x.id === editingId ? { ...x, category: chosen, name, amount: v, actual: act, notes: itemNotes.trim() } : x
+        ),
+      })
+      resetLineItemForm()
+    } else {
+      const item = { id: crypto.randomUUID(), category: chosen, name, amount: v, actual: act, notes: itemNotes.trim() }
+      update({ budgetItems: [...items, item] })
+      setItemName('')
+      setItemAmt('')
+      setItemActual('')
+      setItemNotes('')
+    }
     if (itemCat === '__custom__') {
       setItemCat(chosen)
       setCustomItemCat('')
@@ -881,7 +931,17 @@ function Budgets({ state, update, byCat, totals, onNavigate }) {
   const patchLineItem = (id, patch) => {
     update({ budgetItems: items.map((x) => (x.id === id ? { ...x, ...patch } : x)) })
   }
+  const duplicateLineItem = (id) => {
+    const src = items.find((x) => x.id === id)
+    if (!src) return
+    const idx = items.findIndex((x) => x.id === id)
+    const copy = { ...src, id: crypto.randomUUID(), name: `${src.name} (copy)` }
+    const next = [...items]
+    next.splice(idx + 1, 0, copy)
+    update({ budgetItems: next })
+  }
   const removeLineItem = (id) => {
+    if (editingId === id) resetLineItemForm()
     update({ budgetItems: items.filter((x) => x.id !== id) })
   }
 
@@ -918,10 +978,25 @@ function Budgets({ state, update, byCat, totals, onNavigate }) {
         </div>
       </div>
 
-      <div className="card" style={{ marginTop: 14 }}>
-        <h3>Add a budget line item</h3>
+      <div
+        className="card"
+        ref={formCardRef}
+        style={{
+          marginTop: 14,
+          borderColor: editingId ? 'var(--cyan)' : undefined,
+          boxShadow: editingId ? '0 0 24px rgba(37, 208, 246, 0.18)' : undefined,
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <h3 style={{ margin: 0 }}>{editingId ? `✏️ Editing budget line item: ${itemName || 'Line item'}` : 'Add or edit a budget line item'}</h3>
+          {editingId && (
+            <button type="button" className="btn ghost" style={{ padding: '5px 10px', fontSize: 12 }} onClick={resetLineItemForm}>
+              Cancel edit
+            </button>
+          )}
+        </div>
         <p className="muted" style={{ marginTop: 4, marginBottom: 12 }}>
-          Type each line item directly into your budget (for example Utilities → Columbia Gas, American Water, T-Mobile) with both a planned and actual amount, or edit any cell inline in the table below.
+          Add a new line item below, click <b>✏️ Edit</b> on any existing item to load it into this form, or click directly into any box in the table to edit its Category, Name, Notes, Planned ($), or Actual ($) in real time.
         </p>
         <form onSubmit={addLineItem}>
           <div className="row">
@@ -949,6 +1024,7 @@ function Budgets({ state, update, byCat, totals, onNavigate }) {
             <div className="field" style={{ flex: 2 }}>
               <label htmlFor="budget-item-name">Line item</label>
               <input
+                ref={nameInputRef}
                 id="budget-item-name"
                 value={itemName}
                 onChange={(e) => setItemName(e.target.value)}
@@ -990,7 +1066,7 @@ function Budgets({ state, update, byCat, totals, onNavigate }) {
                 placeholder="Due 15th, autopay…"
               />
             </div>
-            <button className="btn" type="submit">Add line item</button>
+            <button className="btn" type="submit">{editingId ? 'Save line item' : 'Add line item'}</button>
           </div>
         </form>
       </div>
@@ -1030,7 +1106,7 @@ function Budgets({ state, update, byCat, totals, onNavigate }) {
       </div>
 
       <div className="card" style={{ marginTop: 14 }}>
-        <h3>Budgets vs. actual</h3>
+        <h3>Budgets vs. actual (edit any category or line item below)</h3>
         {entries.length === 0 && <div className="empty">No budgets set yet.</div>}
         <div className="list">
           {entries.map(({ category: c, effective: limit, actual: spent, txSpent, itemActualSum, items: catItems }) => {
@@ -1047,47 +1123,65 @@ function Budgets({ state, update, byCat, totals, onNavigate }) {
                       </span>
                     )}
                   </span>
-                  <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                    {catItems.length === 0 && (
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-dim)', margin: 0 }}>
+                        Monthly limit ($):
+                        <span style={{ width: 105, display: 'inline-block' }}>
+                          <AmountCell
+                            ariaLabel={`${c} monthly limit`}
+                            value={limit}
+                            type="expense"
+                            onCommit={(n) => update({ budgets: { ...state.budgets, [c]: Math.max(0, n) } })}
+                          />
+                        </span>
+                      </label>
+                    )}
                     <span className="meta">
                       {fmt(spent)} / {fmt(limit)} · <b style={{ color: limit - spent >= 0 ? 'var(--green)' : 'var(--red)' }}>{fmt(limit - spent)} {limit - spent >= 0 ? 'left' : 'over'}</b> {over && <b style={{ color: 'var(--red)' }}>over</b>}
                     </span>
+                    <button
+                      type="button"
+                      className="btn ghost"
+                      style={{ padding: '6px 10px', fontSize: 12 }}
+                      onClick={() => {
+                        const created = { id: crypto.randomUUID(), category: c, name: catItems.length === 0 ? `${c} item` : 'New item', amount: catItems.length === 0 ? limit : 0, actual: 0, notes: '' }
+                        update({ budgetItems: [...items, created] })
+                        startEditLineItem(created)
+                      }}
+                    >
+                      + Add line item in {c}
+                    </button>
                     <button className="btn danger" onClick={() => removeBudget(c)}>Remove</button>
                   </div>
                 </div>
                 <div className="bar">
                   <span className={over ? 'over' : ''} style={{ width: pct + '%' }} />
                 </div>
-                {catItems.length === 0 && (
-                  <div style={{ marginTop: 4 }}>
-                    <button
-                      type="button"
-                      className="btn ghost"
-                      style={{ padding: '6px 11px', fontSize: 12 }}
-                      onClick={() => update({ budgetItems: [...items, { id: crypto.randomUUID(), category: c, name: 'New item', amount: 0, actual: 0, notes: '' }] })}
-                    >
-                      + Add line item row in {c}
-                    </button>
-                  </div>
-                )}
                 {catItems.length > 0 && (
                   <div className="sheet-wrap budget-sheet-wrap" style={{ marginTop: 6 }}>
                     <table className="sheet budget-sheet">
                       <thead>
                         <tr>
-                          <th>Line item (click to type)</th>
-                          <th>Notes</th>
+                          <th style={{ minWidth: 160 }}>Line item name</th>
+                          <th style={{ width: 135 }}>Category</th>
+                          <th style={{ minWidth: 140 }}>Notes / Due day</th>
                           <th className="num" style={{ width: 120 }}>Planned ($)</th>
                           <th className="num" style={{ width: 120 }}>Actual ($)</th>
-                          <th className="num" style={{ width: 110 }}>Diff</th>
-                          <th style={{ width: 44 }} />
+                          <th className="num" style={{ width: 105 }}>Diff</th>
+                          <th style={{ width: 118, textAlign: 'right' }}>Actions</th>
                         </tr>
                       </thead>
                       <tbody>
                         {catItems.map((it) => {
                           const act = Number(it.actual) || 0
                           const diff = (Number(it.amount) || 0) - act
+                          const isEditingThis = editingId === it.id
                           return (
-                            <tr key={it.id}>
+                            <tr
+                              key={it.id}
+                              style={isEditingThis ? { background: 'rgba(37, 208, 246, 0.12)' } : undefined}
+                            >
                               <td>
                                 <input
                                   aria-label={`${c} line item name`}
@@ -1095,6 +1189,17 @@ function Budgets({ state, update, byCat, totals, onNavigate }) {
                                   placeholder="Line item name…"
                                   onChange={(e) => patchLineItem(it.id, { name: e.target.value })}
                                 />
+                              </td>
+                              <td>
+                                <select
+                                  aria-label={`${it.name} category`}
+                                  value={it.category || c}
+                                  onChange={(e) => patchLineItem(it.id, { category: e.target.value })}
+                                >
+                                  {categories.map((catOpt) => (
+                                    <option key={catOpt} value={catOpt}>{catOpt}</option>
+                                  ))}
+                                </select>
                               </td>
                               <td>
                                 <input
@@ -1105,16 +1210,50 @@ function Budgets({ state, update, byCat, totals, onNavigate }) {
                                 />
                               </td>
                               <td className="num">
-                                <AmountCell value={it.amount} type="expense" onCommit={(n) => patchLineItem(it.id, { amount: n })} />
+                                <AmountCell
+                                  ariaLabel={`${it.name} planned amount`}
+                                  value={it.amount}
+                                  type="expense"
+                                  onCommit={(n) => patchLineItem(it.id, { amount: n })}
+                                />
                               </td>
                               <td className="num">
-                                <AmountCell value={act} type="expense" onCommit={(n) => patchLineItem(it.id, { actual: n })} />
+                                <AmountCell
+                                  ariaLabel={`${it.name} actual amount`}
+                                  value={act}
+                                  type="expense"
+                                  onCommit={(n) => patchLineItem(it.id, { actual: n })}
+                                />
                               </td>
                               <td className="num" style={{ padding: '0 8px', fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: diff >= 0 ? 'var(--green)' : 'var(--red)' }}>
                                 {diff >= 0 ? '+' : ''}{fmt(diff)}
                               </td>
-                              <td className="rowtools">
-                                <button title="Remove line item" aria-label={`Remove ${it.name}`} onClick={() => removeLineItem(it.id)}>✕</button>
+                              <td className="rowtools" style={{ textAlign: 'right' }}>
+                                <button
+                                  type="button"
+                                  title="Edit in form"
+                                  aria-label={`Edit ${it.name}`}
+                                  onClick={() => startEditLineItem(it)}
+                                  style={{ color: isEditingThis ? 'var(--cyan)' : 'var(--green)', fontSize: 12, fontWeight: 600 }}
+                                >
+                                  ✏️ Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  title="Duplicate line item"
+                                  aria-label={`Duplicate ${it.name}`}
+                                  onClick={() => duplicateLineItem(it.id)}
+                                >
+                                  ⧉
+                                </button>
+                                <button
+                                  type="button"
+                                  title="Remove line item"
+                                  aria-label={`Remove ${it.name}`}
+                                  onClick={() => removeLineItem(it.id)}
+                                >
+                                  ✕
+                                </button>
                               </td>
                             </tr>
                           )
@@ -1122,7 +1261,7 @@ function Budgets({ state, update, byCat, totals, onNavigate }) {
                       </tbody>
                       <tfoot>
                         <tr>
-                          <td colSpan={2}>
+                          <td colSpan={3}>
                             <button
                               type="button"
                               className="btn ghost"

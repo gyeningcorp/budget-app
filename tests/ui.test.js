@@ -39,6 +39,7 @@ try {
  fill(owner,'Line item category','Utilities');fill(owner,'Line item','Columbia Gas');fill(owner,'Planned ($)','90');fill(owner,'Actual ($)','85');await submit(owner);
  fill(owner,'Line item','American Water');fill(owner,'Planned ($)','60');fill(owner,'Actual ($)','55');await submit(owner);
  assert(owner.document.body.textContent.includes('Subscriptions'));assert(owner.document.body.textContent.includes('$150.00'));assert(owner.document.body.textContent.includes('$140.00'));
+ owner.document.querySelector('button[aria-label="Edit American Water"]').click();await sleep();fill(owner,'Planned ($)','70');fill(owner,'Actual ($)','65');await submit(owner);assert(owner.document.body.textContent.includes('$160.00'));assert(owner.document.body.textContent.includes('$150.00'));
  await until(()=>owner.document.body.textContent.includes('Family is up to date'));
  await owner.fetch('/api/family/ai-key',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key:'sk-ant-fake-only-ui-test-billing-key'})});await click(owner,'Family');await until(()=>owner.document.body.textContent.includes('Connected ·'));
  await click(owner,'Bill accounts');await until(()=>owner.document.body.textContent.includes('No automatic connection'));for(const provider of ['Palmetto','Columbia Gas','American Water','T-Mobile'])assert(findButton(owner,`Connect ${provider}`));
