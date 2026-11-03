@@ -7,11 +7,21 @@ import HomePlanning from './HomePlanning'
 import BillAccounts from './BillAccounts'
 import { claudeRequest } from './claude'
 import { sharedState } from '../shared/sync'
-import { PAYCHECK_FREQUENCIES, allCategories, canonicalCategory, categoryBudgets, paycheckSummary } from '../shared/budgets'
+import {
+  DEBT_CATEGORIES,
+  PAYCHECK_FREQUENCIES,
+  allCategories,
+  canonicalCategory,
+  categoryBudgets,
+  debtSummary,
+  paycheckSummary,
+  realtimeFinancialSnapshot,
+  simulateDebtPayoff,
+} from '../shared/budgets'
 import { dateKey } from './family.js'
 
 const LS_KEY = 'hog-budget-v1'
-const CATEGORIES = ['Income', 'Housing', 'Food', 'Transport', 'Utilities', 'Health', 'Fun', 'Savings', 'Other']
+const CATEGORIES = ['Income', 'Housing', 'Food', 'Transport', 'Utilities', 'Debt', 'Health', 'Fun', 'Savings', 'Other']
 
 const todayISO = dateKey
 const fmt = (n) =>
@@ -36,6 +46,7 @@ const SEED = {
   billAccounts: [],
   paychecks: [],
   paycheckPlan: {},
+  debts: [],
   apiKey: '',
   bank: { url: '', secret: '' },
 }
@@ -333,6 +344,8 @@ export default function App() {
     setShowInstallGuide((v) => !v)
   }
 
+  const [aiCommandText, setAiCommandText] = useState('')
+  const [queuedAiPrompt, setQueuedAiPrompt] = useState('')
   const update = (patch) => setState((s) => ({ ...s, ...patch }))
 
   const totals = useMemo(() => {
@@ -347,6 +360,8 @@ export default function App() {
       }
     }
     const pay = paycheckSummary(state)
+    const debt = debtSummary(state)
+    const avalanche = simulateDebtPayoff(state.debts || [], 0, 'avalanche')
     const budgetSummary = categoryBudgets(state, byCat)
     const totalPlanned = budgetSummary.reduce((s, b) => s + b.effective, 0)
     const totalActualSpent = budgetSummary.reduce((s, b) => s + b.actual, 0)
@@ -366,9 +381,18 @@ export default function App() {
       net: income - expense,
       totalPlanned,
       unbudgetedIncome,
+      debt,
+      avalanche,
       byCat,
     }
-  }, [state.transactions, state.paychecks, state.budgets, state.budgetItems])
+  }, [state.transactions, state.paychecks, state.budgets, state.budgetItems, state.debts])
+
+  const triggerAiCommand = (promptStr) => {
+    const clean = String(promptStr ?? aiCommandText).trim()
+    if (!clean) return
+    setAiCommandText('')
+    setQueuedAiPrompt(clean + '::' + Date.now())
+  }
 
   return (
     <div className="app">
@@ -407,28 +431,43 @@ export default function App() {
       <div className="family-connection"><span>{sync.account?.household ? sync.account.household.name : "Your family, in one place"}</span><button className="btn ghost" onClick={() => setTab('Family')}>{sync.account ? 'Family settings' : 'Family sign in'}</button></div>
       {sync.conflict && <p role="alert" className="family-error">A simultaneous edit needs your review. <button className="btn ghost" onClick={() => setTab('Family')}>Review changes</button></p>}
       <nav className="tabs" aria-label="App sections">
-        {['Dashboard', 'Calendar', 'Date nights', 'Projects', 'Groceries', 'Meals', 'Paychecks', 'Bill accounts', 'Ideas', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Family', 'Settings'].map((t) => (
+        {['Dashboard', 'Calendar', 'Date nights', 'Projects', 'Groceries', 'Meals', 'Paychecks', 'Debt', 'Bill accounts', 'Ideas', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Family', 'Settings'].map((t) => (
           <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>
             {t}
           </button>
         ))}
       </nav>
 
+      <div className="ai-command-bar" role="region" aria-label="Real-time AI app controller">
+        <span className="hud-tag" style={{ whiteSpace: 'nowrap' }}>⚡ AI LIVE CONTROL</span>
+        <input
+          aria-label="Ask AI to adjust the app"
+          value={aiCommandText}
+          onChange={(e) => setAiCommandText(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && triggerAiCommand()}
+          placeholder='Ask AI to adjust anything: "I have a $140 electric bill due 2026-11-18, adjust the app & show what’s left" or "Best steps to pay off my debt"'
+        />
+        <button type="button" className="btn" onClick={() => triggerAiCommand()}>
+          Adjust & Calculate
+        </button>
+      </div>
+
       {['Calendar', 'Projects', 'Ideas'].includes(tab) && <Family tab={tab} state={state} setState={setState} onNavigate={setTab} />}
       {tab === 'Family' && <Account sync={sync} />}
       {tab === 'Bill accounts' && <BillAccounts sync={sync} onNavigate={setTab} />}
       {tab === 'Date nights' && <DateNights state={state} setState={setState} />}
-      {['Groceries', 'Meals', 'Paychecks'].includes(tab) && <HomePlanning tab={tab} state={state} setState={setState} />}
+      {['Groceries', 'Meals', 'Paychecks'].includes(tab) && <HomePlanning tab={tab} state={state} setState={setState} onNavigate={setTab} />}
+      {tab === 'Debt' && <DebtPlanner state={state} setState={setState} totals={totals} onNavigate={setTab} onAskAi={triggerAiCommand} />}
       {tab === 'Dashboard' && <Dashboard state={state} totals={totals} transactions={state.transactions} onNavigate={setTab} />}
       {tab === 'Transactions' && <Transactions state={state} setState={setState} />}
       {tab === 'Budgets' && <Budgets state={state} update={update} byCat={totals.byCat} totals={totals} onNavigate={setTab} />}
-      {tab === 'Advisor' && <Advisor state={state} totals={totals} />}
+      {tab === 'Advisor' && <Advisor state={state} setState={setState} totals={totals} setTab={setTab} />}
       {tab === 'Opportunities' && <Opportunities state={state} totals={totals} update={update} />}
       {tab === 'Settings' && <Settings state={state} update={update} setState={setState} openFamily={() => setTab('Family')} onInstall={handleInstallClick} isStandalone={isStandalone} hasPrompt={!!installPrompt} />}
 
       <p className="foot">House of Gyening · Family Hub · Your household, together.</p>
 
-      <Assistant state={state} setState={setState} totals={totals} page={tab} setTab={setTab} />
+      <Assistant state={state} setState={setState} totals={totals} page={tab} setTab={setTab} queuedPrompt={queuedAiPrompt} onConsumePrompt={() => setQueuedAiPrompt('')} />
     </div>
   )
 }
@@ -454,7 +493,7 @@ function Dashboard({ state, totals, transactions, onNavigate }) {
         <div className="hud-banner-left">
           <span className="hud-tag">LIVE HOUSEHOLD TELEMETRY</span>
           <h2>Command Overview</h2>
-          <p className="muted">Real-time cashflow, itemized budgets, upcoming utility obligations, and family logistics.</p>
+          <p className="muted">Real-time cashflow, itemized budgets, debt payoff trajectory, upcoming utility obligations, and family logistics.</p>
         </div>
         <div className="hud-metrics">
           <div className="hud-chip">
@@ -468,6 +507,10 @@ function Dashboard({ state, totals, transactions, onNavigate }) {
           <div className="hud-chip">
             <span>UNPAID BILLS</span>
             <strong>{unpaidBills.length} · {fmt(unpaidTotal)}</strong>
+          </div>
+          <div className="hud-chip">
+            <span>TOTAL DEBT</span>
+            <strong className={totals.debt?.totalBalance > 0 ? 'neg' : 'pos'}>{fmt(totals.debt?.totalBalance || 0)}</strong>
           </div>
         </div>
       </div>
@@ -517,19 +560,27 @@ function Dashboard({ state, totals, transactions, onNavigate }) {
               : 'Tap to enter what each paycheck is'}
           </small>
         </button>
+        <button type="button" className="hud-tile" onClick={() => onNavigate('Debt')}>
+          <span className="hud-tile-kicker">DEBT PAYOFF ENGINE</span>
+          <strong>
+            {totals.debt?.count > 0
+              ? `${fmt(totals.debt.totalBalance)} · ${totals.avalanche?.months || 0} mo`
+              : '0 active debts'}
+          </strong>
+          <small>
+            {totals.debt?.count > 0
+              ? `${fmt(totals.debt.totalMonthlyPayment)}/mo · Avg ${totals.debt.weightedApr.toFixed(1)}% APR`
+              : 'Track debt & calculate fastest payoff'}
+          </small>
+        </button>
         <button type="button" className="hud-tile" onClick={() => onNavigate('Groceries')}>
           <span className="hud-tile-kicker">SUPPLY & GROCERIES</span>
           <strong>{openGroceries} to buy</strong>
           <small>{stapleCount} saved on Always list</small>
         </button>
-        <button type="button" className="hud-tile" onClick={() => onNavigate('Projects')}>
-          <span className="hud-tile-kicker">HOME PROJECTS</span>
-          <strong>{activeProjects} active</strong>
-          <small>{(state.familyProjects || []).length} total tracked</small>
-        </button>
         <button type="button" className="hud-tile" onClick={() => onNavigate('Date nights')}>
-          <span className="hud-tile-kicker">DATE NIGHTS</span>
-          <strong>{upcomingDates.length} planned</strong>
+          <span className="hud-tile-kicker">DATE NIGHTS & PROJECTS</span>
+          <strong>{upcomingDates.length} dates · {activeProjects} projects</strong>
           <small>{upcomingDates[0] ? `Next: ${upcomingDates[0].title} (${upcomingDates[0].date})` : 'Tap to plan your next night out'}</small>
         </button>
       </div>
@@ -1101,59 +1152,93 @@ function Budgets({ state, update, byCat, totals, onNavigate }) {
   )
 }
 
-function Advisor({ state, totals }) {
+function Advisor({ state, setState, totals, setTab }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
   const hasKey = !!(state._sharedAI || state.apiKey)
+  const stateRef = useRef(state)
+  useEffect(() => {
+    stateRef.current = state
+  }, [state])
+
+  const mutateState = (updater) => {
+    const next = typeof updater === 'function' ? updater(stateRef.current) : updater
+    stateRef.current = next
+    setState(next)
+  }
 
   const buildContext = () => {
-    const paychecks = (state.paychecks || []).map((p) => `${p.name}${p.owner ? ` (${p.owner})` : ''}: ${fmt(p.amount)} ${p.frequency || 'Bi-weekly'}${p.date ? ` next ${p.date}` : ''}`).join('; ')
+    const snap = realtimeFinancialSnapshot(stateRef.current)
+    const paychecks = (stateRef.current.paychecks || []).map((p) => `${p.name}${p.owner ? ` (${p.owner})` : ''}: ${fmt(p.amount)} ${p.frequency || 'Bi-weekly'}${p.date ? ` next ${p.date}` : ''}`).join('; ')
+    const bills = (stateRef.current.bills || []).map((b) => `${b.id}:${b.title} ${fmt(b.amount)} due ${b.due} (${b.paid ? 'paid' : 'unpaid'})`).join('; ')
+    const debts = (stateRef.current.debts || []).map((d) => `${d.id}:${d.name} (${d.category || 'Debt'}) balance ${fmt(d.balance)} @ ${d.apr}% APR, min ${fmt(d.minPayment)}/mo, extra ${fmt(d.extraPayment || 0)}/mo${d.due ? ` due ${d.due}` : ''}`).join('; ')
     const lines = [
-      `Monthly household income (from paychecks/ledger): ${fmt(totals.income)} (unbudgeted: ${fmt(totals.unbudgetedIncome)})`,
+      `Monthly household income (from paychecks/ledger): ${fmt(snap.monthlyIncome)} (unbudgeted: ${fmt(snap.unbudgetedMonthlyIncome)})`,
+      `Next paycheck cash available: ${fmt(snap.availableOnNextPaycheck)} | Unpaid bills due through payday (${snap.nextPayday || 'unset'}): ${fmt(snap.unpaidBillsThroughPayday)} | Remaining after payday bills: ${fmt(snap.remainingAfterPaydayBills)}`,
       `Paychecks: ${paychecks || '(none configured yet)'}`,
-      `Expense total: ${fmt(totals.expense)}`,
-      `Net: ${fmt(totals.net)}`,
-      'Spending by category: ' +
-        Object.entries(totals.byCat)
-          .map(([c, v]) => `${c} ${fmt(v)}`)
-          .join(', '),
+      `Bills: ${bills || '(none)'}`,
+      `Debts: ${debts || '(none)'}`,
+      `Avalanche debt payoff: ${snap.avalanche.months} months (${snap.avalanche.debtFreeDate}), total interest ${fmt(snap.avalanche.totalInterest)}, saves ${fmt(snap.avalanche.interestSaved)}`,
+      `Expense total: ${fmt(totals.expense)} | Net: ${fmt(totals.net)}`,
       'Budgets: ' +
-        categoryBudgets(state)
+        categoryBudgets(stateRef.current)
           .map(({ category, effective, items }) => `${category} ${fmt(effective)}${items.length ? ` (${items.map((i) => `${i.name} ${fmt(i.amount)}`).join(', ')})` : ''}`)
           .join('; '),
     ]
     return lines.join('\n')
   }
 
-  const send = async () => {
-    const text = input.trim()
+  const send = async (overrideText) => {
+    const text = String(overrideText ?? input).trim()
     if (!text || busy) return
     setError('')
-    const next = [...messages, { role: 'user', content: text }]
-    setMessages(next)
     setInput('')
+    if (!hasKey) {
+      const reply = runLocalAssistantFallback(text, mutateState, stateRef, setTab)
+      setMessages((m) => [...m, { role: 'user', content: text }, { role: 'assistant', content: reply }])
+      return
+    }
+    let convo = [...messages, { role: 'user', content: text }]
+    setMessages(convo)
     setBusy(true)
     try {
-      const res = await claudeRequest(state, {
+      for (let step = 0; step < 10; step++) {
+        const res = await claudeRequest(stateRef.current, {
           model: 'claude-sonnet-4-6',
-          max_tokens: 1024,
+          max_tokens: 1500,
           system:
-            'You are a sharp, practical personal-finance advisor inside a budgeting app. ' +
-            'Be concise and specific. Use the user\'s real numbers below. Give actionable suggestions, ' +
-            'flag overspending, and never invent transactions.\n\nUSER FINANCIAL SNAPSHOT:\n' +
+            'You are the full-app AI Financial Controller & Debt Strategist for "House of Gyening · Family Hub". ' +
+            'You can directly adjust ANY part of the app in real time using your tools: bills, paychecks, budgets, budget line items, debts, transactions, groceries, meals, and calendar events. ' +
+            'When the user says they have a bill due on a certain day or asks to adjust the app to reflect what is left, call `upsert_bill` (which also syncs to Budgets) and report the exact real-time remaining balance on their next paycheck and monthly budget. ' +
+            'When the user asks how to pay off debt or for best steps, call `calculate_debt_payoff` (and `upsert_debt` if they mention a debt) and give clear numbered steps comparing Avalanche vs. Snowball.\n\nLIVE HOUSEHOLD SNAPSHOT:\n' +
             buildContext(),
-          messages: next.map((m) => ({ role: m.role, content: m.content })),
+          tools: AI_TOOLS,
+          messages: convo,
         })
-      if (!res.ok) {
-        const body = await res.text()
-        throw new Error(`API ${res.status}: ${body.slice(0, 300)}`)
+        if (!res.ok) {
+          const body = await res.text()
+          throw new Error(`API ${res.status}: ${body.slice(0, 300)}`)
+        }
+        const data = await res.json()
+        const blocks = data?.content || []
+        convo = [...convo, { role: 'assistant', content: blocks }]
+        setMessages(convo)
+        const toolUses = blocks.filter((b) => b.type === 'tool_use')
+        if (data.stop_reason === 'tool_use' && toolUses.length) {
+          const results = toolUses.map((tu) => ({
+            type: 'tool_result',
+            tool_use_id: tu.id,
+            content: runAiTool(tu.name, tu.input, mutateState, stateRef, setTab),
+          }))
+          convo = [...convo, { role: 'user', content: results }]
+          setMessages(convo)
+          continue
+        }
+        break
       }
-      const data = await res.json()
-      const reply = data?.content?.map((b) => b.text).join('') || '(no response)'
-      setMessages((m) => [...m, { role: 'assistant', content: reply }])
     } catch (e) {
       setError(e.message || String(e))
     } finally {
@@ -1161,27 +1246,54 @@ function Advisor({ state, totals }) {
     }
   }
 
+  const renderRows = []
+  for (const m of messages) {
+    if (m.role === 'user' && typeof m.content === 'string') renderRows.push({ kind: 'user', text: m.content })
+    else if (m.role === 'assistant' && typeof m.content === 'string') renderRows.push({ kind: 'ai', text: m.content })
+    else if (m.role === 'assistant' && Array.isArray(m.content)) {
+      const t = m.content.filter((b) => b.type === 'text').map((b) => b.text).join('')
+      if (t.trim()) renderRows.push({ kind: 'ai', text: t })
+      for (const b of m.content) if (b.type === 'tool_use') renderRows.push({ kind: 'tool', text: b.name })
+    }
+  }
+
   return (
     <div className="card" style={{ marginTop: 18 }}>
-      <h3>AI money advisor</h3>
+      <h3>AI Money Advisor & Real-Time Controller</h3>
       {!hasKey && (
         <div className="callout" style={{ marginBottom: 12 }}>
-          Add your <b>Anthropic API key</b> in <b>Family settings</b> (shared app) or <b>Settings</b> (device app) to enable the advisor. The shared app stores your household key encrypted on the server and sends AI requests to Anthropic. Device-only keys are saved in this browser.
+          <b>Instant Local Mode Active:</b> You can already ask to add bills due on any date, check real-time remaining paycheck cashflow, or calculate your best debt payoff steps below. Add your <b>Anthropic API key</b> in <b>Family settings</b> or <b>Settings</b> anytime to unlock full Claude conversational reasoning.
         </div>
       )}
 
+      <div className="row" style={{ gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        <button type="button" className="btn ghost" onClick={() => send('What is left on my next paycheck and monthly budget right now?')}>
+          📊 What’s left right now?
+        </button>
+        <button type="button" className="btn ghost" onClick={() => send('Give me the best step-by-step plan to pay off my debt fastest.')}>
+          🎯 Best steps to pay off debt
+        </button>
+        <button type="button" className="btn ghost" onClick={() => send('I have a $125 electric bill due on ' + todayISO() + ', adjust the app to reflect real-time what is left.')}>
+          ⚡ Test real-time bill adjustment
+        </button>
+      </div>
+
       <div className="chat">
-        {messages.length === 0 && (
+        {renderRows.length === 0 && (
           <div className="empty">
-            Ask things like “Where am I overspending?” or “How much can I save this month?”
+            Try: “I have a $140 electric bill due on 2026-11-18, can we adjust the app to reflect real-time what’s left?” or “Give me the best steps to pay off my debt.”
           </div>
         )}
-        {messages.map((m, i) => (
-          <div key={i} className={'bubble ' + (m.role === 'user' ? 'user' : 'ai')}>
-            {m.content}
-          </div>
-        ))}
-        {busy && <div className="bubble ai">Thinking…</div>}
+        {renderRows.map((m, i) =>
+          m.kind === 'tool' ? (
+            <div key={i} className="ai-toolchip">🔧 Adjusted via {m.text}</div>
+          ) : (
+            <div key={i} className={'bubble ' + (m.kind === 'user' ? 'user' : 'ai')}>
+              {m.text}
+            </div>
+          )
+        )}
+        {busy && <div className="bubble ai">Adjusting app & calculating…</div>}
       </div>
 
       {error && (
@@ -1194,13 +1306,13 @@ function Advisor({ state, totals }) {
         <div className="field" style={{ flex: 3 }}>
           <input
             value={input}
-            disabled={!hasKey || busy}
+            disabled={busy}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && send()}
-            placeholder={hasKey ? 'Ask your advisor…' : 'Add an API key in Settings first'}
+            placeholder="Tell the advisor about a bill due date, paycheck, budget change, or debt payoff goal…"
           />
         </div>
-        <button className="btn" disabled={!hasKey || busy} onClick={send}>
+        <button className="btn" disabled={busy} onClick={() => send()}>
           Send
         </button>
       </div>
@@ -1452,11 +1564,565 @@ function Settings({ state, update, setState, openFamily, onInstall, isStandalone
   )
 }
 
-// --- In-app AI assistant (talks + edits your data) -------------------------
-const PAGES = ['Dashboard', 'Calendar', 'Date nights', 'Projects', 'Groceries', 'Meals', 'Paychecks', 'Bill accounts', 'Ideas', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Family', 'Settings']
+function DebtPlanner({ state, setState, totals, onNavigate, onAskAi }) {
+  const [strategy, setStrategy] = useState('avalanche')
+  const [extraMonthly, setExtraMonthly] = useState(0)
+  const [name, setName] = useState('')
+  const [category, setCategory] = useState('Credit Card')
+  const [balance, setBalance] = useState('')
+  const [apr, setApr] = useState('')
+  const [minPayment, setMinPayment] = useState('')
+  const [extraPayment, setExtraPayment] = useState('')
+  const [due, setDue] = useState(todayISO())
+  const [notes, setNotes] = useState('')
+  const [syncBillBudget, setSyncBillBudget] = useState(true)
+  const [notice, setNotice] = useState('')
 
-// Tools the model can call to mutate the ledger / budgets / navigate.
+  const debts = state.debts || []
+  const summary = debtSummary(state)
+  const plan = simulateDebtPayoff(debts, extraMonthly, strategy)
+  const altPlan = simulateDebtPayoff(debts, extraMonthly, strategy === 'avalanche' ? 'snowball' : 'avalanche')
+  const rankMap = new Map(plan.order.map((o) => [o.id, o]))
+  const snap = realtimeFinancialSnapshot(state)
+  const suggestedExtra = Math.max(0, Math.round(Math.max(0, snap.unbudgetedMonthlyIncome) * 0.5))
+
+  const syncDebtToBillAndBudget = (debtItem, s) => {
+    const monthlyPay = (Number(debtItem.minPayment) || 0) + (Number(debtItem.extraPayment) || 0)
+    const billId = `debt-bill-${debtItem.id}`
+    const budgetItemId = `debt-budget-${debtItem.id}`
+    const nextBills =
+      monthlyPay > 0 && debtItem.due
+        ? [
+            ...(s.bills || []).filter((b) => b.id !== billId && b.title.toLowerCase() !== debtItem.name.toLowerCase()),
+            { id: billId, title: `${debtItem.name} (Debt Payment)`, amount: monthlyPay, due: debtItem.due, paid: false },
+          ]
+        : s.bills || []
+    const nextBudgetItems =
+      monthlyPay > 0
+        ? [
+            ...(s.budgetItems || []).filter((x) => x.id !== budgetItemId && !(x.category === 'Debt' && x.name.toLowerCase() === debtItem.name.toLowerCase())),
+            {
+              id: budgetItemId,
+              category: 'Debt',
+              name: debtItem.name,
+              amount: monthlyPay,
+              actual: 0,
+              notes: `${debtItem.apr}% APR · Balance ${fmt(debtItem.balance)}${debtItem.due ? ` · Due ${debtItem.due}` : ''}`,
+            },
+          ]
+        : s.budgetItems || []
+    return { ...s, bills: nextBills, budgetItems: nextBudgetItems }
+  }
+
+  const addDebt = (e) => {
+    e.preventDefault()
+    const cleanName = name.trim()
+    const bal = parseFloat(balance)
+    const rate = parseFloat(apr)
+    const min = parseFloat(minPayment)
+    const extra = extraPayment === '' ? 0 : parseFloat(extraPayment)
+    if (!cleanName || isNaN(bal) || bal < 0) return
+    const item = {
+      id: crypto.randomUUID(),
+      name: cleanName,
+      category,
+      balance: Math.max(0, bal),
+      apr: isNaN(rate) ? 0 : Math.max(0, rate),
+      minPayment: isNaN(min) ? 0 : Math.max(0, min),
+      extraPayment: isNaN(extra) ? 0 : Math.max(0, extra),
+      due: due || '',
+      notes: notes.trim(),
+    }
+    setState((s) => {
+      const withDebt = { ...s, debts: [...(s.debts || []), item] }
+      return syncBillBudget ? syncDebtToBillAndBudget(item, withDebt) : withDebt
+    })
+    setName('')
+    setBalance('')
+    setApr('')
+    setMinPayment('')
+    setExtraPayment('')
+    setNotes('')
+    setNotice(
+      `Added "${item.name}" (${fmt(item.balance)} @ ${item.apr}% APR)${syncBillBudget ? ' and synced its payment to Bills & Budgets.' : '.'}`
+    )
+  }
+
+  const patchDebt = (id, patch) => {
+    setState((s) => ({
+      ...s,
+      debts: (s.debts || []).map((d) => (d.id === id ? { ...d, ...patch } : d)),
+    }))
+  }
+
+  const removeDebt = (id) => {
+    setState((s) => ({
+      ...s,
+      debts: (s.debts || []).filter((d) => d.id !== id),
+      bills: (s.bills || []).filter((b) => b.id !== `debt-bill-${id}`),
+      budgetItems: (s.budgetItems || []).filter((x) => x.id !== `debt-budget-${id}`),
+    }))
+  }
+
+  const payDebtNow = (d) => {
+    const payAmt = (Number(d.minPayment) || 0) + (Number(d.extraPayment) || 0) || Math.min(100, Number(d.balance) || 0)
+    if (payAmt <= 0) return
+    const nextBal = Math.max(0, (Number(d.balance) || 0) - payAmt)
+    const tx = {
+      id: `debt-tx-${d.id}-${Date.now()}`,
+      desc: `Debt payment · ${d.name}`,
+      amount: payAmt,
+      category: 'Debt',
+      type: 'expense',
+      date: todayISO(),
+    }
+    setState((s) => ({
+      ...s,
+      debts: (s.debts || []).map((x) => (x.id === d.id ? { ...x, balance: nextBal } : x)),
+      bills: (s.bills || []).map((b) => (b.id === `debt-bill-${d.id}` || b.title.toLowerCase().includes(d.name.toLowerCase()) ? { ...b, paid: true } : b)),
+      transactions: [tx, ...(s.transactions || [])],
+    }))
+    setNotice(`Logged ${fmt(payAmt)} payment toward ${d.name}. New balance: ${fmt(nextBal)}.`)
+  }
+
+  return (
+    <section className="family-space">
+      <p className="family-eyebrow">DEBT ELIMINATION & PAYOFF CALCULATOR</p>
+      <h2>Household Debt Ledger & Payoff Strategy</h2>
+
+      <div className="grid cols-4" style={{ marginTop: 14 }}>
+        <div className="card">
+          <h3>Total Debt Balance</h3>
+          <div className={'stat ' + (summary.totalBalance > 0 ? 'neg' : 'pos')}>{fmt(summary.totalBalance)}</div>
+          <div className="muted">{summary.count} active debt account{summary.count === 1 ? '' : 's'}</div>
+        </div>
+        <div className="card">
+          <h3>Monthly Debt Payments</h3>
+          <div className="stat">{fmt(summary.totalMonthlyPayment + Number(extraMonthly || 0))}</div>
+          <div className="muted">{fmt(summary.totalMinPayment)} minimums + {fmt(summary.totalExtraPayment + Number(extraMonthly || 0))} extra</div>
+        </div>
+        <div className="card">
+          <h3>Monthly Interest Burn</h3>
+          <div className="stat neg">{fmt(summary.monthlyInterest)}/mo</div>
+          <div className="muted">Weighted avg {summary.weightedApr.toFixed(2)}% APR</div>
+        </div>
+        <div className="card">
+          <h3>Debt-Free Countdown</h3>
+          <div className="stat pos">{plan.months === 0 ? 'Debt-Free!' : `${plan.months} mo`}</div>
+          <div className="muted">
+            {plan.months > 0 ? `Est. ${plan.debtFreeDate} · saves ${fmt(plan.interestSaved)} interest` : 'Add your debts below to calculate'}
+          </div>
+        </div>
+      </div>
+
+      {notice && <p role="status" className="family-notice">{notice}</p>}
+
+      <div className="family-card">
+        <span className="hud-tag">STEP 1 · DEBT COLUMN & ACCOUNTS</span>
+        <h3 style={{ marginTop: 6 }}>1. Add & Track Your Debts</h3>
+        <p>Enter credit cards, auto loans, student loans, personal loans, or medical balances. Edit any cell inline below, or sync payments directly into Bills and Budgets so your whole app reflects what’s left in real time.</p>
+        <form onSubmit={addDebt}>
+          <div className="row">
+            <div className="field" style={{ flex: 2 }}>
+              <label htmlFor="debt-name">Debt / Account name</label>
+              <input id="debt-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Chase Sapphire, Auto Loan, Student Loan" required />
+            </div>
+            <div className="field">
+              <label htmlFor="debt-cat">Type</label>
+              <select id="debt-cat" value={category} onChange={(e) => setCategory(e.target.value)}>
+                {DEBT_CATEGORIES.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="debt-bal">Balance ($)</label>
+              <input id="debt-bal" type="number" min="0" step="0.01" value={balance} onChange={(e) => setBalance(e.target.value)} placeholder="4200.00" required />
+            </div>
+            <div className="field">
+              <label htmlFor="debt-apr">APR (%)</label>
+              <input id="debt-apr" type="number" min="0" step="0.01" value={apr} onChange={(e) => setApr(e.target.value)} placeholder="22.99" required />
+            </div>
+            <div className="field">
+              <label htmlFor="debt-min">Min Payment ($/mo)</label>
+              <input id="debt-min" type="number" min="0" step="0.01" value={minPayment} onChange={(e) => setMinPayment(e.target.value)} placeholder="110.00" required />
+            </div>
+            <div className="field">
+              <label htmlFor="debt-extra">Extra ($/mo)</label>
+              <input id="debt-extra" type="number" min="0" step="0.01" value={extraPayment} onChange={(e) => setExtraPayment(e.target.value)} placeholder="0.00" />
+            </div>
+            <div className="field">
+              <label htmlFor="debt-due">Next Due Date</label>
+              <input id="debt-due" type="date" value={due} onChange={(e) => setDue(e.target.value)} />
+            </div>
+            <div className="field">
+              <label htmlFor="debt-notes">Notes</label>
+              <input id="debt-notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="0% promo ends…" />
+            </div>
+            <button className="btn" type="submit">+ Add debt</button>
+          </div>
+          <label className="family-task" style={{ marginTop: 8 }}>
+            <input type="checkbox" checked={syncBillBudget} onChange={(e) => setSyncBillBudget(e.target.checked)} />
+            <span>Also sync this debt’s monthly payment to upcoming <b>Bills</b> & <b>Budgets</b> so Paychecks & Dashboard reflect it automatically</span>
+          </label>
+        </form>
+
+        {debts.length === 0 ? (
+          <div className="callout" style={{ marginTop: 12 }}>
+            <b>No debts entered yet.</b> Add your credit cards or loans above (or tell the AI bar at the top: <i>“Add a $3,500 Visa at 24% APR with $95 min payment due 2026-11-18 and show me how to pay it off”</i>).
+          </div>
+        ) : (
+          <div className="sheet-wrap" style={{ marginTop: 12 }}>
+            <table className="sheet">
+              <thead>
+                <tr>
+                  <th style={{ width: 70 }}>Order</th>
+                  <th>Debt / Account</th>
+                  <th style={{ width: 135 }}>Type</th>
+                  <th className="num" style={{ width: 120 }}>Balance ($)</th>
+                  <th className="num" style={{ width: 95 }}>APR (%)</th>
+                  <th className="num" style={{ width: 115 }}>Min ($/mo)</th>
+                  <th className="num" style={{ width: 115 }}>Extra ($/mo)</th>
+                  <th style={{ width: 135 }}>Next Due</th>
+                  <th className="num" style={{ width: 120 }}>Est. Payoff</th>
+                  <th style={{ width: 195 }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {debts.map((d) => {
+                  const info = rankMap.get(d.id)
+                  return (
+                    <tr key={d.id}>
+                      <td style={{ padding: '8px 10px', fontWeight: 800, color: info?.rank === 1 ? 'var(--green)' : 'var(--muted)' }}>
+                        {info ? `#${info.rank}` : 'Paid'}
+                      </td>
+                      <td>
+                        <input aria-label={`${d.name} name`} value={d.name} onChange={(e) => patchDebt(d.id, { name: e.target.value })} />
+                      </td>
+                      <td>
+                        <select aria-label={`${d.name} type`} value={d.category || 'Credit Card'} onChange={(e) => patchDebt(d.id, { category: e.target.value })}>
+                          {DEBT_CATEGORIES.map((c) => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="num">
+                        <input
+                          aria-label={`${d.name} balance`}
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          className="cell-num expense"
+                          value={d.balance}
+                          onChange={(e) => {
+                            const v = parseFloat(e.target.value)
+                            patchDebt(d.id, { balance: isNaN(v) ? 0 : Math.max(0, v) })
+                          }}
+                        />
+                      </td>
+                      <td className="num">
+                        <input
+                          aria-label={`${d.name} apr`}
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          className="cell-num"
+                          value={d.apr}
+                          onChange={(e) => {
+                            const v = parseFloat(e.target.value)
+                            patchDebt(d.id, { apr: isNaN(v) ? 0 : Math.max(0, v) })
+                          }}
+                        />
+                      </td>
+                      <td className="num">
+                        <input
+                          aria-label={`${d.name} min payment`}
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          className="cell-num"
+                          value={d.minPayment}
+                          onChange={(e) => {
+                            const v = parseFloat(e.target.value)
+                            patchDebt(d.id, { minPayment: isNaN(v) ? 0 : Math.max(0, v) })
+                          }}
+                        />
+                      </td>
+                      <td className="num">
+                        <input
+                          aria-label={`${d.name} extra payment`}
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          className="cell-num income"
+                          value={d.extraPayment ?? 0}
+                          onChange={(e) => {
+                            const v = parseFloat(e.target.value)
+                            patchDebt(d.id, { extraPayment: isNaN(v) ? 0 : Math.max(0, v) })
+                          }}
+                        />
+                      </td>
+                      <td>
+                        <input aria-label={`${d.name} due date`} type="date" value={d.due || ''} onChange={(e) => patchDebt(d.id, { due: e.target.value })} />
+                      </td>
+                      <td className="num" style={{ padding: '8px 10px', fontSize: 12, color: 'var(--cyan)' }}>
+                        {info ? `${info.payoffMonth} mo (${info.payoffDate})` : 'Done'}
+                      </td>
+                      <td className="rowtools">
+                        <button type="button" title="Log payment & reduce debt balance" onClick={() => payDebtNow(d)}>Pay & log</button>
+                        <button
+                          type="button"
+                          title="Sync payment to Bills & Budgets"
+                          onClick={() => {
+                            setState((s) => syncDebtToBillAndBudget(d, s))
+                            setNotice(`Synced ${d.name} to Bills and Debt Budget.`)
+                          }}
+                        >
+                          Sync app
+                        </button>
+                        <button type="button" title="Delete debt" aria-label={`Remove ${d.name}`} onClick={() => removeDebt(d.id)}>✕</button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colSpan={3}>Total Debt & Monthly Commitments</td>
+                  <td className="num" style={{ color: 'var(--red)' }}>{fmt(summary.totalBalance)}</td>
+                  <td className="num">{summary.weightedApr.toFixed(1)}% avg</td>
+                  <td className="num">{fmt(summary.totalMinPayment)}/mo</td>
+                  <td className="num" style={{ color: 'var(--green)' }}>{fmt(summary.totalExtraPayment)}/mo</td>
+                  <td colSpan={3} className="num" style={{ color: 'var(--cyan)' }}>
+                    Est. total interest: {fmt(plan.totalInterest)}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="family-card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10 }}>
+          <div>
+            <span className="hud-tag">STEP 2 · PAYOFF CALCULATOR & AI STRATEGY</span>
+            <h3 style={{ marginTop: 6 }}>2. Best Steps on How to Pay Off Your Debt</h3>
+            <p>Compare <b>Avalanche</b> (highest interest rate first — saves the most money) vs. <b>Snowball</b> (smallest balance first — fastest wins), and see how adding extra cash from your paychecks accelerates your debt-free date.</p>
+          </div>
+          <div className="family-actions" style={{ marginTop: 0 }}>
+            <button type="button" className={'btn ' + (strategy === 'avalanche' ? '' : 'ghost')} onClick={() => setStrategy('avalanche')}>
+              🔥 Avalanche (Highest APR First)
+            </button>
+            <button type="button" className={'btn ' + (strategy === 'snowball' ? '' : 'ghost')} onClick={() => setStrategy('snowball')}>
+              ⚡ Snowball (Smallest Balance First)
+            </button>
+            <button
+              type="button"
+              className="btn ghost"
+              onClick={() => onAskAi('Analyze my debts, paychecks, and bills and give me the best step-by-step plan to pay off my debt fastest.')}
+            >
+              ✨ Ask AI for Custom Debt Plan
+            </button>
+          </div>
+        </div>
+
+        <div className="family-toolbar" style={{ marginTop: 12 }}>
+          <label className="family-field" style={{ maxWidth: 260 }}>
+            Extra monthly pool toward #1 priority debt ($)
+            <input
+              type="number"
+              min="0"
+              step="10"
+              value={extraMonthly}
+              onChange={(e) => setExtraMonthly(Math.max(0, Number(e.target.value) || 0))}
+            />
+          </label>
+          <div className="family-actions" style={{ margin: 0 }}>
+            <button type="button" className="btn ghost" onClick={() => setExtraMonthly(0)}>+$0/mo</button>
+            <button type="button" className="btn ghost" onClick={() => setExtraMonthly(100)}>+$100/mo</button>
+            <button type="button" className="btn ghost" onClick={() => setExtraMonthly(250)}>+$250/mo</button>
+            <button type="button" className="btn ghost" onClick={() => setExtraMonthly(500)}>+$500/mo</button>
+            {suggestedExtra > 0 && (
+              <button type="button" className="btn ghost" onClick={() => setExtraMonthly(suggestedExtra)}>
+                Use 50% of unbudgeted cashflow (+{fmt(suggestedExtra)}/mo)
+              </button>
+            )}
+          </div>
+        </div>
+
+        {plan.order.length > 0 && (
+          <>
+            <div className="grid cols-2" style={{ marginTop: 10 }}>
+              <div className="callout">
+                <b>Selected: {strategy === 'avalanche' ? '🔥 Avalanche Method' : '⚡ Snowball Method'}</b>
+                <div style={{ marginTop: 6 }}>
+                  Debt-free in <b>{plan.months} months</b> ({plan.debtFreeDate}) · Total interest: <b>{fmt(plan.totalInterest)}</b> · Saves <b>{fmt(plan.interestSaved)}</b> and <b>{plan.monthsSaved} months</b> vs. minimum payments.
+                </div>
+              </div>
+              <div className="callout">
+                <b>Comparison: {strategy === 'avalanche' ? '⚡ Snowball Method' : '🔥 Avalanche Method'}</b>
+                <div style={{ marginTop: 6 }}>
+                  Debt-free in <b>{altPlan.months} months</b> ({altPlan.debtFreeDate}) · Total interest: <b>{fmt(altPlan.totalInterest)}</b> · First knockout: <b>{altPlan.order[0]?.name}</b> in <b>{altPlan.order[0]?.payoffMonth} mo</b>.
+                </div>
+              </div>
+            </div>
+
+            <div className="paycheck-waterfall" style={{ marginTop: 14 }}>
+              {plan.steps.map((stepText, idx) => (
+                <div key={idx} className="waterfall-row">
+                  <div>
+                    <strong>{stepText}</strong>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </section>
+  )
+}
+
+// --- In-app AI assistant (talks + edits your data across the ENTIRE app) ---
+const PAGES = ['Dashboard', 'Calendar', 'Date nights', 'Projects', 'Groceries', 'Meals', 'Paychecks', 'Debt', 'Bill accounts', 'Ideas', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Family', 'Settings']
+
+// Tools the model can call to mutate any part of the household app in real time.
 const AI_TOOLS = [
+  {
+    name: 'upsert_bill',
+    description: 'Add a new bill or update an existing bill (by id or title) due on a specific date. Also optionally syncs the bill to the Utilities/category budget line items and returns the real-time remaining balance on the next paycheck and monthly budget.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        title: { type: 'string', description: 'Bill name, e.g. "Electric", "Columbia Gas", "Water", "Internet"' },
+        amount: { type: 'number', description: 'Bill amount in dollars, >= 0' },
+        due: { type: 'string', description: 'Due date in YYYY-MM-DD format' },
+        paid: { type: 'boolean', description: 'Whether the bill is already paid (default false)' },
+        category: { type: 'string', description: 'Budget category to sync with (default Utilities)' },
+        syncToBudget: { type: 'boolean', description: 'Also add/update this bill in Budgets line items (default true)' },
+      },
+      required: ['title', 'amount', 'due'],
+    },
+  },
+  {
+    name: 'delete_bill',
+    description: 'Remove a bill by id or title and recalculate real-time remaining cashflow.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        title: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'pay_bill',
+    description: 'Mark a bill paid (by id or title) and log the payment to the transaction ledger.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        title: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'upsert_paycheck',
+    description: 'Add or update a household paycheck stream (name, earner, net amount, frequency, next payday YYYY-MM-DD) so all app income, Paychecks waterfall, and Budgets flow off of it in real time.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string', description: 'Paycheck label, e.g. "Chris paycheck" or "Primary paycheck"' },
+        owner: { type: 'string', description: 'Household member / earner name' },
+        amount: { type: 'number', description: 'Net take-home dollar amount per paycheck, >= 0' },
+        frequency: { type: 'string', enum: PAYCHECK_FREQUENCIES },
+        date: { type: 'string', description: 'Next payday YYYY-MM-DD' },
+        notes: { type: 'string' },
+      },
+      required: ['name', 'amount'],
+    },
+  },
+  {
+    name: 'remove_paycheck',
+    description: 'Remove a saved paycheck by its id or name.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'set_paycheck_plan',
+    description: 'Adjust the next payday cutoff date (YYYY-MM-DD) or starting cash available override in the Paychecks planner.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        date: { type: 'string', description: 'Next payday cutoff date YYYY-MM-DD' },
+        available: { type: 'string', description: 'Custom cash available override in dollars, or empty string "" to use saved paychecks automatically' },
+      },
+    },
+  },
+  {
+    name: 'upsert_debt',
+    description: 'Add or update a debt account (credit card, auto loan, student loan, personal loan, medical, mortgage, etc.) with balance, APR %, minimum payment, extra payment, and due date. Syncs to Bills & Budgets and calculates best payoff steps.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string', description: 'Debt name, e.g. "Chase Visa", "Auto Loan", "Student Loan"' },
+        category: { type: 'string', enum: DEBT_CATEGORIES },
+        balance: { type: 'number', description: 'Current balance owed in dollars, >= 0' },
+        apr: { type: 'number', description: 'Annual Percentage Rate (APR %), e.g. 22.99' },
+        minPayment: { type: 'number', description: 'Minimum monthly payment in dollars, >= 0' },
+        extraPayment: { type: 'number', description: 'Extra monthly payment toward this debt in dollars, >= 0' },
+        due: { type: 'string', description: 'Next due date YYYY-MM-DD' },
+        notes: { type: 'string' },
+        syncToBillAndBudget: { type: 'boolean', description: 'Sync monthly payment to Bills and Debt Budget (default true)' },
+      },
+      required: ['name', 'balance', 'apr', 'minPayment'],
+    },
+  },
+  {
+    name: 'delete_debt',
+    description: 'Remove a debt account by id or name.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'record_debt_payment',
+    description: 'Record a payment toward a debt (by id or name), reducing its balance in real time and logging the transaction.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string' },
+        amount: { type: 'number', description: 'Payment amount in dollars' },
+        date: { type: 'string', description: 'YYYY-MM-DD' },
+      },
+      required: ['amount'],
+    },
+  },
+  {
+    name: 'calculate_debt_payoff',
+    description: 'Calculate the optimal debt payoff plan (Avalanche vs. Snowball), exact payoff months/dates, total interest saved, and step-by-step action plan.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        extraMonthly: { type: 'number', description: 'Additional monthly dollar amount to throw at the #1 priority debt' },
+        strategy: { type: 'string', enum: ['avalanche', 'snowball'] },
+      },
+    },
+  },
   {
     name: 'add_transaction',
     description: 'Add a new income or expense transaction to the ledger.',
@@ -1474,7 +2140,7 @@ const AI_TOOLS = [
   },
   {
     name: 'update_transaction',
-    description: 'Edit fields of an existing transaction by its id. Only pass fields you want to change.',
+    description: 'Edit fields of an existing transaction by its id.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1482,8 +2148,8 @@ const AI_TOOLS = [
         desc: { type: 'string' },
         amount: { type: 'number' },
         type: { type: 'string', enum: ['income', 'expense'] },
-        category: { type: 'string', description: 'Spending or income category (default or custom)' },
-        date: { type: 'string', description: 'YYYY-MM-DD' },
+        category: { type: 'string' },
+        date: { type: 'string' },
       },
       required: ['id'],
     },
@@ -1499,7 +2165,7 @@ const AI_TOOLS = [
     input_schema: {
       type: 'object',
       properties: {
-        category: { type: 'string', description: 'Category name, e.g. Food, Utilities, Subscriptions' },
+        category: { type: 'string', description: 'Category name, e.g. Food, Utilities, Debt, Subscriptions' },
         limit: { type: 'number', description: 'Monthly limit in dollars, > 0' },
       },
       required: ['category', 'limit'],
@@ -1507,7 +2173,7 @@ const AI_TOOLS = [
   },
   {
     name: 'add_budget_item',
-    description: 'Add a line item inside a budget category (for example Utilities -> Columbia Gas planned $90, actual $85.42).',
+    description: 'Add or update a line item inside a budget category (for example Utilities -> Columbia Gas planned $90, actual $85.42).',
     input_schema: {
       type: 'object',
       properties: {
@@ -1522,34 +2188,41 @@ const AI_TOOLS = [
   },
   {
     name: 'remove_budget_item',
-    description: 'Remove a budget line item by its id.',
-    input_schema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
-  },
-  {
-    name: 'add_paycheck',
-    description: 'Add or define a household paycheck stream (what the paycheck is, earner, net amount, frequency, next payday) so the rest of the app flows off of that income.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        name: { type: 'string', description: 'Paycheck label, e.g. "Chris paycheck" or "Sarah paycheck"' },
-        owner: { type: 'string', description: 'Household member / earner name' },
-        amount: { type: 'number', description: 'Net take-home dollar amount per paycheck, >= 0' },
-        frequency: { type: 'string', enum: PAYCHECK_FREQUENCIES },
-        date: { type: 'string', description: 'Next payday YYYY-MM-DD' },
-        notes: { type: 'string' },
-      },
-      required: ['name', 'amount'],
-    },
-  },
-  {
-    name: 'remove_paycheck',
-    description: 'Remove a saved paycheck by its id.',
-    input_schema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+    description: 'Remove a budget line item by its id or name.',
+    input_schema: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' } } },
   },
   {
     name: 'remove_budget',
     description: 'Remove the budget for a category.',
     input_schema: { type: 'object', properties: { category: { type: 'string' } }, required: ['category'] },
+  },
+  {
+    name: 'manage_groceries',
+    description: 'Add an item to the shopping list or always list, or load all always-list staples into groceries.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['add', 'add_staple', 'load_staples'] },
+        name: { type: 'string' },
+        quantity: { type: 'string' },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'manage_calendar_event',
+    description: 'Add a family calendar event or date night on a specific date.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['event', 'date_night'] },
+        title: { type: 'string' },
+        date: { type: 'string', description: 'YYYY-MM-DD' },
+        budget: { type: 'number' },
+        notes: { type: 'string' },
+      },
+      required: ['title', 'date'],
+    },
   },
   {
     name: 'navigate',
@@ -1561,10 +2234,243 @@ const AI_TOOLS = [
 const newId = () => 't' + Date.now() + '-' + Math.floor(Math.random() * 1e4)
 const cleanDate = (d) => (d && /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0, 10) : todayISO())
 
-// Execute one tool call against state. `stateRef` gives a live read of current
-// state (setState is batched), and we return a short string result for the model.
-function runAiTool(name, input, setState, stateRef, setTab) {
+function formatLiveRemaining(s) {
+  const snap = realtimeFinancialSnapshot(s)
+  return (
+    `REAL-TIME SNAPSHOT → Next paycheck cash available: ${fmt(snap.availableOnNextPaycheck)} | ` +
+    `Unpaid bills due through ${snap.nextPayday || 'payday'}: ${fmt(snap.unpaidBillsThroughPayday)} (${snap.billsDueThroughPayday.length} bill${snap.billsDueThroughPayday.length === 1 ? '' : 's'}) | ` +
+    `Remaining after payday bills: ${fmt(snap.remainingAfterPaydayBills)} | ` +
+    `Monthly income: ${fmt(snap.monthlyIncome)} | Planned monthly budget: ${fmt(snap.totalPlannedBudget)} | ` +
+    `Unbudgeted monthly income left: ${fmt(snap.unbudgetedMonthlyIncome)}.`
+  )
+}
+
+// Execute one tool call against state. `applyState` updates both `stateRef.current` synchronously
+// and React state so multiple tools in a single turn compose cleanly.
+function runAiTool(name, input, applyState, stateRef, setTab) {
+  const mutate = (fn) => {
+    const next = fn(stateRef.current)
+    stateRef.current = next
+    applyState(next)
+    return next
+  }
+
   switch (name) {
+    case 'upsert_bill': {
+      const title = String(input.title || '').trim()
+      const amount = Math.max(0, Number(input.amount) || 0)
+      const due = cleanDate(input.due)
+      const paid = Boolean(input.paid)
+      if (!title) return 'Bill title is required.'
+      const cat = canonicalCategory(
+        stateRef.current,
+        input.category || (guessCategory(title) === 'Other' ? 'Utilities' : guessCategory(title))
+      )
+      const syncToBudget = input.syncToBudget !== false
+      let savedBill = null
+      const nextState = mutate((s) => {
+        const bills = s.bills || []
+        const existing = bills.find((b) => (input.id && b.id === input.id) || b.title.toLowerCase() === title.toLowerCase())
+        savedBill = existing
+          ? { ...existing, title, amount, due, paid }
+          : { id: crypto.randomUUID(), title, amount, due, paid }
+        const nextBills = existing
+          ? bills.map((b) => (b.id === existing.id ? savedBill : b))
+          : [...bills, savedBill]
+
+        let nextBudgetItems = s.budgetItems || []
+        if (syncToBudget && cat && cat.toLowerCase() !== 'income') {
+          const existingItem = nextBudgetItems.find(
+            (x) => x.name.toLowerCase() === title.toLowerCase() && x.category.toLowerCase() === cat.toLowerCase()
+          )
+          if (existingItem) {
+            nextBudgetItems = nextBudgetItems.map((x) =>
+              x.id === existingItem.id ? { ...x, amount, notes: `Due ${due}` } : x
+            )
+          } else {
+            nextBudgetItems = [
+              ...nextBudgetItems,
+              { id: crypto.randomUUID(), category: cat, name: title, amount, actual: paid ? amount : 0, notes: `Due ${due}` },
+            ]
+          }
+        }
+        const currentPlanDate = s.paycheckPlan?.date || ''
+        const nextPlanDate = !currentPlanDate || currentPlanDate < due ? due : currentPlanDate
+        return {
+          ...s,
+          bills: nextBills,
+          budgetItems: nextBudgetItems,
+          paycheckPlan: { ...(s.paycheckPlan || {}), date: s.paychecks?.length ? currentPlanDate : nextPlanDate },
+        }
+      })
+      return `Saved bill "${savedBill.title}" (${fmt(savedBill.amount)} due ${savedBill.due}, ${savedBill.paid ? 'paid' : 'unpaid'})${syncToBudget ? ` and synced to ${cat} budget` : ''}. ${formatLiveRemaining(nextState)}`
+    }
+    case 'delete_bill': {
+      const target = (stateRef.current.bills || []).find(
+        (b) => (input.id && b.id === input.id) || (input.title && b.title.toLowerCase() === String(input.title).toLowerCase())
+      )
+      if (!target) return `No matching bill found.`
+      const nextState = mutate((s) => ({
+        ...s,
+        bills: (s.bills || []).filter((b) => b.id !== target.id),
+      }))
+      return `Removed bill "${target.title}" (${fmt(target.amount)}). ${formatLiveRemaining(nextState)}`
+    }
+    case 'pay_bill': {
+      const target = (stateRef.current.bills || []).find(
+        (b) => (input.id && b.id === input.id) || (input.title && b.title.toLowerCase().includes(String(input.title).toLowerCase()))
+      )
+      if (!target) return `No matching bill found to mark paid.`
+      const nextState = mutate((s) => {
+        const txId = `bill-tx-${target.id}`
+        const exists = (s.transactions || []).some((t) => t.id === txId)
+        const tx = {
+          id: txId,
+          desc: target.title,
+          amount: Number(target.amount) || 0,
+          category: 'Utilities',
+          type: 'expense',
+          date: todayISO(),
+        }
+        return {
+          ...s,
+          bills: (s.bills || []).map((b) => (b.id === target.id ? { ...b, paid: true } : b)),
+          transactions: exists ? s.transactions : [tx, ...(s.transactions || [])],
+        }
+      })
+      return `Marked "${target.title}" (${fmt(target.amount)}) paid and logged in ledger. ${formatLiveRemaining(nextState)}`
+    }
+    case 'upsert_paycheck':
+    case 'add_paycheck': {
+      const nameStr = String(input.name || '').trim()
+      const amount = Math.max(0, Number(input.amount) || 0)
+      const frequency = PAYCHECK_FREQUENCIES.includes(input.frequency) ? input.frequency : 'Bi-weekly'
+      const date = input.date ? cleanDate(input.date) : todayISO()
+      const owner = input.owner ? String(input.owner).trim() : ''
+      const notes = input.notes ? String(input.notes).trim() : ''
+      if (!nameStr) return `Invalid paycheck name.`
+      let saved = null
+      const nextState = mutate((s) => {
+        const list = s.paychecks || []
+        const existing = list.find((p) => (input.id && p.id === input.id) || p.name.toLowerCase() === nameStr.toLowerCase())
+        saved = existing
+          ? { ...existing, name: nameStr, amount, frequency, date, owner: owner || existing.owner || '', notes: notes || existing.notes || '' }
+          : { id: crypto.randomUUID(), name: nameStr, amount, frequency, date, owner, notes }
+        return {
+          ...s,
+          paychecks: existing ? list.map((p) => (p.id === existing.id ? saved : p)) : [...list, saved],
+          paycheckPlan: { ...(s.paycheckPlan || {}), date: date || s.paycheckPlan?.date || '', available: '' },
+        }
+      })
+      return `Saved paycheck "${saved.name}" (${fmt(saved.amount)} ${saved.frequency}, next payday ${saved.date}). ${formatLiveRemaining(nextState)}`
+    }
+    case 'remove_paycheck': {
+      const cur = (stateRef.current.paychecks || []).find(
+        (x) => (input.id && x.id === input.id) || (input.name && x.name.toLowerCase() === String(input.name).toLowerCase())
+      )
+      if (!cur) return `No matching paycheck found.`
+      const nextState = mutate((s) => ({ ...s, paychecks: (s.paychecks || []).filter((x) => x.id !== cur.id) }))
+      return `Removed paycheck "${cur.name}". ${formatLiveRemaining(nextState)}`
+    }
+    case 'set_paycheck_plan': {
+      const nextState = mutate((s) => ({
+        ...s,
+        paycheckPlan: {
+          ...(s.paycheckPlan || {}),
+          ...(input.date !== undefined ? { date: input.date ? cleanDate(input.date) : '' } : {}),
+          ...(input.available !== undefined ? { available: String(input.available) } : {}),
+        },
+      }))
+      return `Updated paycheck planner window. ${formatLiveRemaining(nextState)}`
+    }
+    case 'upsert_debt': {
+      const debtName = String(input.name || '').trim()
+      const balance = Math.max(0, Number(input.balance) || 0)
+      const apr = Math.max(0, Number(input.apr) || 0)
+      const minPayment = Math.max(0, Number(input.minPayment) || 0)
+      const extraPayment = Math.max(0, Number(input.extraPayment) || 0)
+      const category = DEBT_CATEGORIES.includes(input.category) ? input.category : 'Credit Card'
+      const due = input.due ? cleanDate(input.due) : ''
+      const notes = input.notes ? String(input.notes).trim() : ''
+      if (!debtName) return 'Debt name is required.'
+      let savedDebt = null
+      const nextState = mutate((s) => {
+        const list = s.debts || []
+        const existing = list.find((d) => (input.id && d.id === input.id) || d.name.toLowerCase() === debtName.toLowerCase())
+        savedDebt = existing
+          ? { ...existing, name: debtName, category, balance, apr, minPayment, extraPayment, due: due || existing.due || '', notes: notes || existing.notes || '' }
+          : { id: crypto.randomUUID(), name: debtName, category, balance, apr, minPayment, extraPayment, due, notes }
+        const nextDebts = existing ? list.map((d) => (d.id === existing.id ? savedDebt : d)) : [...list, savedDebt]
+        const monthlyPay = minPayment + extraPayment
+        const billId = `debt-bill-${savedDebt.id}`
+        const budgetItemId = `debt-budget-${savedDebt.id}`
+        const sync = input.syncToBillAndBudget !== false
+        const nextBills =
+          sync && monthlyPay > 0 && savedDebt.due
+            ? [
+                ...(s.bills || []).filter((b) => b.id !== billId && b.title.toLowerCase() !== `${savedDebt.name} (debt payment)`.toLowerCase()),
+                { id: billId, title: `${savedDebt.name} (Debt Payment)`, amount: monthlyPay, due: savedDebt.due, paid: false },
+              ]
+            : s.bills || []
+        const nextBudgetItems =
+          sync && monthlyPay > 0
+            ? [
+                ...(s.budgetItems || []).filter((x) => x.id !== budgetItemId && !(x.category === 'Debt' && x.name.toLowerCase() === savedDebt.name.toLowerCase())),
+                { id: budgetItemId, category: 'Debt', name: savedDebt.name, amount: monthlyPay, actual: 0, notes: `${apr}% APR · Balance ${fmt(balance)}` },
+              ]
+            : s.budgetItems || []
+        return { ...s, debts: nextDebts, bills: nextBills, budgetItems: nextBudgetItems }
+      })
+      const plan = simulateDebtPayoff(nextState.debts, 0, 'avalanche')
+      return `Saved debt "${savedDebt.name}" (balance ${fmt(savedDebt.balance)} @ ${savedDebt.apr}% APR, min ${fmt(savedDebt.minPayment)}/mo). Avalanche payoff: ${plan.months} months (${plan.debtFreeDate}), total interest ${fmt(plan.totalInterest)}. ${formatLiveRemaining(nextState)}`
+    }
+    case 'delete_debt': {
+      const target = (stateRef.current.debts || []).find(
+        (d) => (input.id && d.id === input.id) || (input.name && d.name.toLowerCase() === String(input.name).toLowerCase())
+      )
+      if (!target) return `No matching debt found.`
+      const nextState = mutate((s) => ({
+        ...s,
+        debts: (s.debts || []).filter((d) => d.id !== target.id),
+        bills: (s.bills || []).filter((b) => b.id !== `debt-bill-${target.id}`),
+        budgetItems: (s.budgetItems || []).filter((x) => x.id !== `debt-budget-${target.id}`),
+      }))
+      return `Removed debt "${target.name}". ${formatLiveRemaining(nextState)}`
+    }
+    case 'record_debt_payment': {
+      const target = (stateRef.current.debts || []).find(
+        (d) => (input.id && d.id === input.id) || (input.name && d.name.toLowerCase().includes(String(input.name).toLowerCase()))
+      )
+      if (!target) return `No matching debt found.`
+      const payAmt = Math.max(0, Number(input.amount) || 0)
+      const nextBal = Math.max(0, (Number(target.balance) || 0) - payAmt)
+      const dayStr = input.date ? cleanDate(input.date) : todayISO()
+      const nextState = mutate((s) => ({
+        ...s,
+        debts: (s.debts || []).map((d) => (d.id === target.id ? { ...d, balance: nextBal } : d)),
+        bills: (s.bills || []).map((b) => (b.id === `debt-bill-${target.id}` ? { ...b, paid: true } : b)),
+        transactions: [
+          { id: newId(), desc: `Debt payment · ${target.name}`, amount: payAmt, category: 'Debt', type: 'expense', date: dayStr },
+          ...(s.transactions || []),
+        ],
+      }))
+      return `Recorded ${fmt(payAmt)} payment on "${target.name}" (new balance ${fmt(nextBal)}). ${formatLiveRemaining(nextState)}`
+    }
+    case 'calculate_debt_payoff': {
+      const extra = Math.max(0, Number(input.extraMonthly) || 0)
+      const strat = input.strategy === 'snowball' ? 'snowball' : 'avalanche'
+      const av = simulateDebtPayoff(stateRef.current.debts || [], extra, 'avalanche')
+      const sn = simulateDebtPayoff(stateRef.current.debts || [], extra, 'snowball')
+      const chosen = strat === 'snowball' ? sn : av
+      if (chosen.order.length === 0) return 'No active debts with a positive balance are currently entered.'
+      return (
+        `DEBT PAYOFF CALCULATION (extra ${fmt(extra)}/mo):\n` +
+        `- Avalanche (Highest APR First): ${av.months} months (${av.debtFreeDate}), total interest ${fmt(av.totalInterest)}, saves ${fmt(av.interestSaved)} and ${av.monthsSaved} months.\n` +
+        `- Snowball (Smallest Balance First): ${sn.months} months (${sn.debtFreeDate}), total interest ${fmt(sn.totalInterest)}, #1 knockout "${sn.order[0]?.name}" in ${sn.order[0]?.payoffMonth} months.\n` +
+        `Payoff Order (${strat}): ${chosen.order.map((o) => `#${o.rank} ${o.name} (${fmt(o.balance)} @ ${o.apr}% APR, pay ${fmt(o.firstMonthTargetPayment)}/mo -> paid off in ${o.payoffMonth} mo / ${o.payoffDate})`).join(' | ')}\n` +
+        `Best Steps:\n${chosen.steps.join('\n')}`
+      )
+    }
     case 'add_transaction': {
       const type = input.type === 'income' ? 'income' : 'expense'
       const category = input.category && String(input.category).trim()
@@ -1580,8 +2486,8 @@ function runAiTool(name, input, setState, stateRef, setTab) {
         category,
         date: cleanDate(input.date),
       }
-      setState((s) => ({ ...s, transactions: [tx, ...s.transactions] }))
-      return `Added ${tx.type} "${tx.desc}" ${fmt(tx.amount)} in ${tx.category} on ${tx.date} (id ${tx.id}).`
+      const nextState = mutate((s) => ({ ...s, transactions: [tx, ...s.transactions] }))
+      return `Added ${tx.type} "${tx.desc}" ${fmt(tx.amount)} in ${tx.category} on ${tx.date} (id ${tx.id}). ${formatLiveRemaining(nextState)}`
     }
     case 'update_transaction': {
       const cur = stateRef.current.transactions.find((t) => t.id === input.id)
@@ -1590,59 +2496,53 @@ function runAiTool(name, input, setState, stateRef, setTab) {
       for (const k of ['desc', 'category', 'date']) if (input[k] != null) patch[k] = k === 'date' ? cleanDate(input[k]) : input[k]
       if (input.amount != null) patch.amount = Math.abs(Number(input.amount) || 0)
       if (input.type != null) patch.type = input.type === 'income' ? 'income' : 'expense'
-      setState((s) => ({ ...s, transactions: s.transactions.map((t) => (t.id === input.id ? { ...t, ...patch } : t)) }))
-      return `Updated ${input.id}: ${JSON.stringify(patch)}.`
+      const nextState = mutate((s) => ({ ...s, transactions: s.transactions.map((t) => (t.id === input.id ? { ...t, ...patch } : t)) }))
+      return `Updated ${input.id}: ${JSON.stringify(patch)}. ${formatLiveRemaining(nextState)}`
     }
     case 'delete_transaction': {
       const cur = stateRef.current.transactions.find((t) => t.id === input.id)
       if (!cur) return `No transaction with id ${input.id}.`
       if (!confirm(`Delete "${cur.desc}" ${fmt(cur.amount)} (${cur.date})?`))
         return `User declined — "${cur.desc}" was NOT deleted.`
-      setState((s) => ({ ...s, transactions: s.transactions.filter((t) => t.id !== input.id) }))
-      return `Deleted ${input.id} ("${cur.desc}" ${fmt(cur.amount)}).`
+      const nextState = mutate((s) => ({ ...s, transactions: s.transactions.filter((t) => t.id !== input.id) }))
+      return `Deleted ${input.id} ("${cur.desc}" ${fmt(cur.amount)}). ${formatLiveRemaining(nextState)}`
     }
     case 'set_budget': {
       const c = canonicalCategory(stateRef.current, input.category)
       if (!c || c.toLowerCase() === 'income') return `Invalid category "${input.category}".`
       const v = Number(input.limit)
       if (!(v > 0)) return `Limit must be greater than 0.`
-      setState((s) => ({ ...s, budgets: { ...s.budgets, [c]: v } }))
-      return `Set ${c} budget to ${fmt(v)}.`
+      const nextState = mutate((s) => ({ ...s, budgets: { ...s.budgets, [c]: v } }))
+      return `Set ${c} budget to ${fmt(v)}. ${formatLiveRemaining(nextState)}`
     }
     case 'add_budget_item': {
       const c = canonicalCategory(stateRef.current, input.category)
-      const name = String(input.name || '').trim()
+      const itemName = String(input.name || '').trim()
       const amount = Number(input.amount)
       const actual = input.actual != null ? Math.max(0, Number(input.actual) || 0) : 0
       const notes = input.notes ? String(input.notes).trim() : ''
-      if (!c || c.toLowerCase() === 'income' || !name || !(amount >= 0)) return `Invalid budget line item.`
-      const item = { id: crypto.randomUUID(), category: c, name, amount, actual, notes }
-      setState((s) => ({ ...s, budgetItems: [...(s.budgetItems || []), item] }))
-      return `Added budget line item "${name}" (planned ${fmt(amount)}, actual ${fmt(actual)}) under ${c} (id ${item.id}).`
+      if (!c || c.toLowerCase() === 'income' || !itemName || !(amount >= 0)) return `Invalid budget line item.`
+      let savedItem = null
+      const nextState = mutate((s) => {
+        const list = s.budgetItems || []
+        const existing = list.find((x) => x.category.toLowerCase() === c.toLowerCase() && x.name.toLowerCase() === itemName.toLowerCase())
+        savedItem = existing
+          ? { ...existing, amount, actual: input.actual != null ? actual : existing.actual, notes: notes || existing.notes || '' }
+          : { id: crypto.randomUUID(), category: c, name: itemName, amount, actual, notes }
+        return {
+          ...s,
+          budgetItems: existing ? list.map((x) => (x.id === existing.id ? savedItem : x)) : [...list, savedItem],
+        }
+      })
+      return `Saved budget line item "${savedItem.name}" (planned ${fmt(savedItem.amount)}, actual ${fmt(savedItem.actual)}) under ${c}. ${formatLiveRemaining(nextState)}`
     }
     case 'remove_budget_item': {
-      const cur = (stateRef.current.budgetItems || []).find((x) => x.id === input.id)
-      if (!cur) return `No budget line item with id ${input.id}.`
-      setState((s) => ({ ...s, budgetItems: (s.budgetItems || []).filter((x) => x.id !== input.id) }))
-      return `Removed budget line item "${cur.name}" from ${cur.category}.`
-    }
-    case 'add_paycheck': {
-      const name = String(input.name || '').trim()
-      const amount = Number(input.amount)
-      const frequency = PAYCHECK_FREQUENCIES.includes(input.frequency) ? input.frequency : 'Bi-weekly'
-      const date = input.date ? cleanDate(input.date) : todayISO()
-      const owner = input.owner ? String(input.owner).trim() : ''
-      const notes = input.notes ? String(input.notes).trim() : ''
-      if (!name || !(amount >= 0)) return `Invalid paycheck.`
-      const item = { id: crypto.randomUUID(), name, amount, frequency, date, owner, notes }
-      setState((s) => ({ ...s, paychecks: [...(s.paychecks || []), item] }))
-      return `Added paycheck "${name}" (${fmt(amount)} ${frequency}) (id ${item.id}).`
-    }
-    case 'remove_paycheck': {
-      const cur = (stateRef.current.paychecks || []).find((x) => x.id === input.id)
-      if (!cur) return `No paycheck with id ${input.id}.`
-      setState((s) => ({ ...s, paychecks: (s.paychecks || []).filter((x) => x.id !== input.id) }))
-      return `Removed paycheck "${cur.name}".`
+      const cur = (stateRef.current.budgetItems || []).find(
+        (x) => (input.id && x.id === input.id) || (input.name && x.name.toLowerCase() === String(input.name).toLowerCase())
+      )
+      if (!cur) return `No matching budget line item found.`
+      const nextState = mutate((s) => ({ ...s, budgetItems: (s.budgetItems || []).filter((x) => x.id !== cur.id) }))
+      return `Removed budget line item "${cur.name}" from ${cur.category}. ${formatLiveRemaining(nextState)}`
     }
     case 'remove_budget': {
       const c = canonicalCategory(stateRef.current, input.category)
@@ -1651,12 +2551,60 @@ function runAiTool(name, input, setState, stateRef, setTab) {
       if (!hasLimit && !hasItems) return `No budget set for "${c}".`
       if (!confirm(`Remove the ${c} budget?`))
         return `User declined — ${c} budget was NOT removed.`
-      setState((s) => {
+      const nextState = mutate((s) => {
         const next = { ...s.budgets }
         delete next[c]
         return { ...s, budgets: next, budgetItems: (s.budgetItems || []).filter((x) => x.category.toLowerCase() !== c.toLowerCase()) }
       })
-      return `Removed ${c} budget.`
+      return `Removed ${c} budget. ${formatLiveRemaining(nextState)}`
+    }
+    case 'manage_groceries': {
+      if (input.action === 'load_staples') {
+        mutate((s) => {
+          const current = s.groceries || []
+          const staples = s.groceryStaples || []
+          const fresh = staples.filter((st) => !current.some((g) => !g.checked && g.name.toLowerCase() === st.name.toLowerCase()))
+          return { ...s, groceries: [...current, ...fresh.map((st) => ({ id: crypto.randomUUID(), name: st.name, quantity: st.quantity || '', checked: false }))] }
+        })
+        return 'Loaded always-list staples into the active grocery list.'
+      }
+      const itemName = String(input.name || '').trim()
+      if (!itemName) return 'Grocery item name is required.'
+      if (input.action === 'add_staple') {
+        mutate((s) => ({
+          ...s,
+          groceryStaples: [...(s.groceryStaples || []), { id: crypto.randomUUID(), name: itemName, quantity: String(input.quantity || '') }],
+        }))
+        return `Added "${itemName}" to the household Always grocery list.`
+      }
+      mutate((s) => ({
+        ...s,
+        groceries: [...(s.groceries || []), { id: crypto.randomUUID(), name: itemName, quantity: String(input.quantity || ''), checked: false }],
+      }))
+      return `Added "${itemName}" to the shopping list.`
+    }
+    case 'manage_calendar_event': {
+      const title = String(input.title || '').trim()
+      const date = cleanDate(input.date)
+      if (!title) return 'Title is required.'
+      if (input.kind === 'date_night') {
+        mutate((s) => ({
+          ...s,
+          dateNights: [
+            ...(s.dateNights || []),
+            { id: crypto.randomUUID(), title, date, budget: Math.max(0, Number(input.budget) || 0), spent: 0, childcare: '', status: 'Planned', notes: String(input.notes || '') },
+          ],
+        }))
+        return `Planned date night "${title}" on ${date}.`
+      }
+      mutate((s) => ({
+        ...s,
+        familyEvents: [
+          ...(s.familyEvents || []),
+          { id: crypto.randomUUID(), title, date, time: '', endTime: '', member: 'Everyone', category: 'Family', repeat: 'None', until: '', notes: String(input.notes || ''), exceptions: [] },
+        ],
+      }))
+      return `Added calendar event "${title}" on ${date}.`
     }
     case 'navigate': {
       if (!PAGES.includes(input.page)) return `Unknown page "${input.page}".`
@@ -1668,7 +2616,108 @@ function runAiTool(name, input, setState, stateRef, setTab) {
   }
 }
 
-function Assistant({ state, setState, totals, page, setTab }) {
+function parseSpokenDate(text) {
+  const iso = text.match(/\b(20\d{2}-\d{2}-\d{2})\b/)
+  if (iso) return iso[1]
+  const slash = text.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/)
+  if (slash) {
+    const yr = slash[3] ? (slash[3].length === 2 ? '20' + slash[3] : slash[3]) : String(new Date().getFullYear())
+    return `${yr}-${slash[1].padStart(2, '0')}-${slash[2].padStart(2, '0')}`
+  }
+  const ordinal = text.match(/\b(?:on\s+the\s+|due\s+the\s+|due\s+on\s+the\s+|the\s+)(\d{1,2})(?:st|nd|rd|th)\b/i)
+  if (ordinal) {
+    const base = todayISO().slice(0, 8)
+    return `${base}${ordinal[1].padStart(2, '0')}`
+  }
+  if (/\btomorrow\b/i.test(text)) {
+    const d = new Date()
+    d.setDate(d.getDate() + 1)
+    return d.toISOString().slice(0, 10)
+  }
+  return todayISO()
+}
+
+function runLocalAssistantFallback(text, applyState, stateRef, setTab) {
+  const lower = text.toLowerCase()
+  const dueDate = parseSpokenDate(text)
+
+  // 1. Debt addition or Debt Payoff Strategy request
+  if (/\bdebt|pay\s*off|avalanche|snowball|apr|credit\s*card|loan\b/i.test(text)) {
+    const aprMatch = text.match(/(\d+(?:\.\d+)?)\s*%\s*(?:apr|interest)?/i)
+    const balMatch = text.match(/\$\s*(\d+(?:,\d{3})*(?:\.\d+)?)/)
+    const minMatch = text.match(/min(?:imum)?\s*(?:payment)?\s*(?:of\s*)?\$?\s*(\d+(?:\.\d+)?)/i)
+    if (balMatch && (aprMatch || /\badd\b/i.test(text))) {
+      const bal = parseFloat(balMatch[1].replace(/,/g, ''))
+      const apr = aprMatch ? parseFloat(aprMatch[1]) : 19.99
+      const min = minMatch ? parseFloat(minMatch[1]) : Math.max(35, Math.round(bal * 0.025))
+      const nameClean =
+        text
+          .replace(/\$[\d,.]+/g, '')
+          .replace(/\d+(?:\.\d+)?\s*%\s*(?:apr|interest)?/gi, '')
+          .replace(/\b(add|my|debt|credit card|loan|at|with|min|minimum|payment|due|on|20\d{2}-\d{2}-\d{2}|and|show|how|to|pay|it|off)\b/gi, ' ')
+          .replace(/\s+/g, ' ')
+          .trim() || 'Credit Card / Debt'
+      const msg = runAiTool(
+        'upsert_debt',
+        { name: nameClean, balance: bal, apr, minPayment: min, due: dueDate, syncToBillAndBudget: true },
+        applyState,
+        stateRef,
+        setTab
+      )
+      setTab('Debt')
+      const calc = runAiTool('calculate_debt_payoff', { strategy: 'avalanche', extraMonthly: 0 }, applyState, stateRef, setTab)
+      return `✅ Adjusted app with your debt and synced it to Bills & Budgets:\n${msg}\n\n${calc}`
+    }
+
+    setTab('Debt')
+    const snap = realtimeFinancialSnapshot(stateRef.current)
+    const suggestedExtra = Math.max(0, Math.round(Math.max(0, snap.unbudgetedMonthlyIncome) * 0.5))
+    const calc = runAiTool('calculate_debt_payoff', { strategy: 'avalanche', extraMonthly: suggestedExtra }, applyState, stateRef, setTab)
+    return `📊 Here is your real-time Debt Payoff Analysis (using ${fmt(suggestedExtra)}/mo from your unbudgeted cashflow):\n\n${calc}`
+  }
+
+  // 2. Bill due on a specific day / "adjust the app to reflect real time what's left"
+  if (/\bbill\b|\bdue\b|\belectric\b|\bwater\b|\bgas\b|\binternet\b|\brent\b|\bmortgage\b|\binsurance\b|\bt-mobile\b|\bcolumbia\b|\bpalmetto\b/i.test(text)) {
+    const amtMatch = text.match(/\$\s*(\d+(?:,\d{3})*(?:\.\d+)?)/) || text.match(/\b(\d+(?:\.\d+)?)\s*dollars?\b/i)
+    if (amtMatch) {
+      const amount = parseFloat(amtMatch[1].replace(/,/g, ''))
+      let title = 'Utility Bill'
+      const known = ['Columbia Gas', 'American Water', 'Palmetto', 'T-Mobile', 'Electric', 'Water', 'Gas', 'Internet', 'Rent', 'Mortgage', 'Car Insurance', 'Phone', 'Trash', 'Daycare']
+      const matchedKnown = known.find((k) => lower.includes(k.toLowerCase()))
+      if (matchedKnown) title = matchedKnown
+      else {
+        const beforeBill = text.match(/(?:have\s+a\s+|have\s+an\s+|this\s+|my\s+)([a-zA-Z][a-zA-Z0-9\s]{1,24}?)\s+bill/i)
+        if (beforeBill) title = beforeBill[1].trim()
+      }
+      const resMsg = runAiTool(
+        'upsert_bill',
+        { title, amount, due: dueDate, paid: false, syncToBudget: true },
+        applyState,
+        stateRef,
+        setTab
+      )
+      setTab('Paychecks')
+      return `✅ Added/updated your "${title}" bill (${fmt(amount)} due ${dueDate}), synced it to your Budgets & Calendar, and recalculated your real-time balances:\n\n${resMsg}`
+    }
+  }
+
+  // 3. Paycheck update
+  if (/\bpaycheck\b|\bpaid\b|\bsalary\b|\btake-home\b/i.test(text)) {
+    const amtMatch = text.match(/\$\s*(\d+(?:,\d{3})*(?:\.\d+)?)/)
+    if (amtMatch) {
+      const amount = parseFloat(amtMatch[1].replace(/,/g, ''))
+      const freq = /weekly/i.test(text) && !/bi/i.test(text) ? 'Weekly' : /semi/i.test(text) ? 'Semi-monthly' : /month/i.test(text) ? 'Monthly' : 'Bi-weekly'
+      const resMsg = runAiTool('upsert_paycheck', { name: 'Household Paycheck', amount, frequency: freq, date: dueDate }, applyState, stateRef, setTab)
+      setTab('Paychecks')
+      return `✅ Updated your paycheck and recalculated the entire app:\n\n${resMsg}`
+    }
+  }
+
+  // Default: return complete real-time household & debt status
+  return `📊 ${formatLiveRemaining(stateRef.current)}\n\nTip: You can say things like:\n• "I have a $140 electric bill due on 2026-11-18, adjust the app to reflect what's left"\n• "Add debt Chase Visa $4,200 at 22.9% APR min $110 and give me best steps to pay it off"`
+}
+
+function Assistant({ state, setState, totals, page, setTab, queuedPrompt, onConsumePrompt }) {
   const [open, setOpen] = useState(false)
   const [convo, setConvo] = useState([]) // Anthropic-format messages (string or block[] content)
   const [input, setInput] = useState('')
@@ -1682,55 +2731,86 @@ function Assistant({ state, setState, totals, page, setTab }) {
     stateRef.current = state
   }, [state])
 
+  const applyState = (next) => {
+    stateRef.current = next
+    setState(next)
+  }
+
   const scrollRef = useRef(null)
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }, [convo, busy, open])
 
   const systemPrompt = () => {
-    const tx = state.transactions
+    const current = stateRef.current
+    const snap = realtimeFinancialSnapshot(current)
+    const tx = (current.transactions || [])
       .slice()
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
-      .slice(0, 50)
+      .slice(0, 40)
       .map((t) => `${t.id} | ${t.date} | ${t.type} | ${t.category} | ${fmt(t.amount)} | ${t.desc}`)
       .join('\n')
+    const bills = (current.bills || [])
+      .map((b) => `${b.id} | due ${b.due} | ${b.paid ? 'paid' : 'unpaid'} | ${fmt(b.amount)} | ${b.title}`)
+      .join('\n')
+    const debts = (current.debts || [])
+      .map((d) => `${d.id} | ${d.name} (${d.category || 'Debt'}) | balance ${fmt(d.balance)} | ${d.apr}% APR | min ${fmt(d.minPayment)}/mo | extra ${fmt(d.extraPayment || 0)}/mo | due ${d.due || 'unset'}`)
+      .join('\n')
     return (
-      'You are the built-in assistant for the "House of Gyening · Budget" app. ' +
-      'You can answer money questions AND directly change the user\'s data using the provided tools ' +
-      '(add/update/delete transactions, set/remove budgets, navigate pages). ' +
-      'When the user asks to add, log, change, fix, categorize, budget, or remove something, DO IT with a tool — do not just describe it. ' +
-      'To edit or delete a specific transaction, use its id from the list below. ' +
-      'After acting, confirm what you changed in one short sentence. Be concise and never invent transactions you weren\'t asked to add.\n\n' +
+      'You are Rory, the built-in AI Financial Controller & Debt Strategist for "House of Gyening · Family Hub". ' +
+      'You can answer money questions AND directly adjust ANY part of the app in real time using the provided tools ' +
+      '(upsert/delete/pay bills, upsert/remove paychecks, set paycheck planner dates, upsert/delete/pay debts, calculate debt payoff, add/update/delete transactions, set/remove budgets & budget line items, manage groceries & calendar events, and navigate tabs). ' +
+      'IMPORTANT RULES:\n' +
+      '1. When the user says they have a bill due on a certain day or asks to adjust the app to reflect real-time what is left, IMMEDIATELY call `upsert_bill` (with `syncToBudget: true`) and optionally `navigate` to "Paychecks", then report the exact real-time numbers from the tool result (Remaining on next paycheck after bills, and Unbudgeted monthly income left).\n' +
+      '2. When the user asks how to pay off debt or for best steps on paying off debt, call `calculate_debt_payoff` (and `upsert_debt` if they mention a new debt) and give a clear, numbered step-by-step plan comparing Avalanche vs. Snowball.\n' +
+      '3. Always act with tools first—do not just describe what the user could do manually.\n\n' +
       `Today is ${todayISO()}. The user is currently on the "${page}" page.\n` +
-      `Valid categories: ${allCategories(state).join(', ')} (or any new custom category).\n\n` +
-      'SNAPSHOT:\n' +
-      `Income ${fmt(totals.income)} (Paychecks per cycle ${fmt(totals.paycheckPerCycle)} · Unbudgeted ${fmt(totals.unbudgetedIncome)}) · Spending ${fmt(totals.expense)} · Net ${fmt(totals.net)}\n` +
+      `Valid categories: ${allCategories(current).join(', ')} (or any new custom category).\n\n` +
+      'REAL-TIME HOUSEHOLD SNAPSHOT:\n' +
+      `Monthly Income ${fmt(snap.monthlyIncome)} (Paychecks per cycle ${fmt(snap.paycheckPerCycle)} · Unbudgeted monthly ${fmt(snap.unbudgetedMonthlyIncome)}) · Spending ${fmt(snap.monthlyExpense)} · Net ${fmt(snap.netMonthlyCashflow)}\n` +
+      `Next Paycheck Available: ${fmt(snap.availableOnNextPaycheck)} | Unpaid Bills Due Through Payday (${snap.nextPayday || 'unset'}): ${fmt(snap.unpaidBillsThroughPayday)} | Remaining After Payday Bills: ${fmt(snap.remainingAfterPaydayBills)}\n` +
       'Paychecks: ' +
-      ((state.paychecks || []).map((p) => `${p.id}:${p.name}=${fmt(p.amount)} (${p.frequency || 'Bi-weekly'}, next ${p.date || 'unset'})`).join(', ') || '(none)') +
+      ((current.paychecks || []).map((p) => `${p.id}:${p.name}=${fmt(p.amount)} (${p.frequency || 'Bi-weekly'}, next ${p.date || 'unset'})`).join(', ') || '(none)') +
       '\nBudgets: ' +
-      (categoryBudgets(state).map(({ category, effective, items }) => `${category} ${fmt(effective)}${items.length ? ` [${items.map((i) => `${i.id}:${i.name}=${fmt(i.amount)}`).join(', ')}]` : ''}`).join(', ') || '(none)') +
+      (categoryBudgets(current).map(({ category, effective, items }) => `${category} ${fmt(effective)}${items.length ? ` [${items.map((i) => `${i.id}:${i.name}=${fmt(i.amount)}`).join(', ')}]` : ''}`).join(', ') || '(none)') +
+      '\n\nBills (id | due | status | amount | title):\n' +
+      (bills || '(none)') +
+      '\n\nDebts (id | name | balance | APR | min | extra | due):\n' +
+      (debts || '(none)') +
       '\n\nRecent transactions (id | date | type | category | amount | desc):\n' +
       (tx || '(none)')
     )
   }
 
-  const send = async () => {
-    const text = input.trim()
-    if (!text || busy || !hasKey) return
+  const sendText = async (rawText) => {
+    const text = String(rawText ?? input).trim()
+    if (!text || busy) return
     setError('')
     setInput('')
+    setOpen(true)
+
+    if (!hasKey) {
+      const reply = runLocalAssistantFallback(text, applyState, stateRef, setTab)
+      setConvo((prev) => [
+        ...prev,
+        { role: 'user', content: text },
+        { role: 'assistant', content: [{ type: 'text', text: reply }] },
+      ])
+      return
+    }
+
     let messages = [...convo, { role: 'user', content: text }]
     setConvo(messages)
     setBusy(true)
     try {
-      for (let step = 0; step < 8; step++) {
-        const res = await claudeRequest(state, {
-            model: 'claude-sonnet-4-6',
-            max_tokens: 1024,
-            system: systemPrompt(),
-            tools: AI_TOOLS,
-            messages,
-          })
+      for (let step = 0; step < 10; step++) {
+        const res = await claudeRequest(stateRef.current, {
+          model: 'claude-sonnet-4-6',
+          max_tokens: 1500,
+          system: systemPrompt(),
+          tools: AI_TOOLS,
+          messages,
+        })
         if (!res.ok) throw new Error(`API ${res.status}: ${(await res.text()).slice(0, 300)}`)
         const data = await res.json()
         const blocks = data.content || []
@@ -1742,7 +2822,7 @@ function Assistant({ state, setState, totals, page, setTab }) {
           const results = toolUses.map((tu) => ({
             type: 'tool_result',
             tool_use_id: tu.id,
-            content: runAiTool(tu.name, tu.input, setState, stateRef, setTab),
+            content: runAiTool(tu.name, tu.input, applyState, stateRef, setTab),
           }))
           messages = [...messages, { role: 'user', content: results }]
           setConvo(messages)
@@ -1757,6 +2837,13 @@ function Assistant({ state, setState, totals, page, setTab }) {
     }
   }
 
+  useEffect(() => {
+    if (!queuedPrompt) return
+    const clean = queuedPrompt.split('::')[0]
+    onConsumePrompt?.()
+    if (clean) sendText(clean)
+  }, [queuedPrompt])
+
   // Flatten the API conversation into renderable rows.
   const rows = []
   for (const m of convo) {
@@ -1767,7 +2854,6 @@ function Assistant({ state, setState, totals, page, setTab }) {
       if (text.trim()) rows.push({ kind: 'ai', text })
       for (const b of m.content) if (b.type === 'tool_use') rows.push({ kind: 'tool', text: b.name })
     }
-    // tool_result messages are represented by their tool chip above — skip.
   }
 
   return (
@@ -1775,7 +2861,7 @@ function Assistant({ state, setState, totals, page, setTab }) {
       {open && (
         <div className="ai-panel">
           <div className="ai-head">
-            <span>📚 Ask Rory · {page}</span>
+            <span>📚 Ask Rory · Live App Control ({page})</span>
             <div className="ai-head-tools">
               {convo.length > 0 && (
                 <button className="ai-x" title="Clear chat" onClick={() => setConvo([])}>⟲</button>
@@ -1786,14 +2872,14 @@ function Assistant({ state, setState, totals, page, setTab }) {
 
           {!hasKey && (
             <div className="callout" style={{ margin: 10 }}>
-              Add your <b>Anthropic API key</b> in <b>Family settings</b> (shared app) or <b>Settings</b> (device app) to use the assistant.
+              <b>Instant Smart Control Active:</b> Ask about bills due, what’s left on your paycheck, or debt payoff steps below! Add a <b>Claude API key</b> in <b>Family settings</b> or <b>Settings</b> anytime for full AI reasoning.
             </div>
           )}
 
           <div className="ai-body" ref={scrollRef}>
             {rows.length === 0 && (
               <div className="empty" style={{ padding: '8px 4px' }}>
-                Try “add $40 groceries today”, “set Fun budget to $150”, or “where am I overspending?”
+                Try: “I have a $140 electric bill due on 2026-11-18, adjust the app to reflect what’s left” or “Give me best steps to pay off my debt.”
               </div>
             )}
             {rows.map((r, i) =>
@@ -1803,19 +2889,19 @@ function Assistant({ state, setState, totals, page, setTab }) {
                 <div key={i} className={'bubble ' + (r.kind === 'user' ? 'user' : 'ai')}>{r.text}</div>
               )
             )}
-            {busy && <div className="bubble ai">Thinking…</div>}
+            {busy && <div className="bubble ai">Adjusting app & calculating…</div>}
             {error && <div className="callout" style={{ color: 'var(--red)', marginTop: 8 }}>{error}</div>}
           </div>
 
           <div className="ai-input">
             <input
               value={input}
-              disabled={!hasKey || busy}
+              disabled={busy}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && send()}
-              placeholder={hasKey ? 'Talk to your budget…' : 'Add an API key in Settings'}
+              onKeyDown={(e) => e.key === 'Enter' && sendText()}
+              placeholder="Tell Rory to add a bill due date, adjust budgets, or plan debt payoff…"
             />
-            <button className="btn" disabled={!hasKey || busy} onClick={send}>Send</button>
+            <button className="btn" disabled={busy} onClick={() => sendText()}>Send</button>
           </div>
         </div>
       )}
@@ -1826,4 +2912,5 @@ function Assistant({ state, setState, totals, page, setTab }) {
     </div>
   )
 }
+
 

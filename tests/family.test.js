@@ -8,20 +8,38 @@ import { createApp } from '../server/app.js'
 import { applyOps, differences, emptyShared } from '../shared/sync.js'
 import { holidays, eventsForYear } from '../src/family.js'
 import { addStaplesToList } from '../shared/groceries.js'
-import { allCategories, categoryBudgets, paycheckSummary } from '../shared/budgets.js'
-test('budget line items and custom categories sum per category and sync cleanly', () => {
+import { allCategories, categoryBudgets, debtSummary, paycheckSummary, realtimeFinancialSnapshot, simulateDebtPayoff } from '../shared/budgets.js'
+test('budget line items, debts, payoff strategies, and custom categories sync cleanly', () => {
   const original=emptyShared()
   const items=[{id:'bi1',category:'Utilities',name:'Columbia Gas',amount:90,actual:85.42,notes:'Autopay'},{id:'bi2',category:'Utilities',name:'American Water',amount:60,actual:54.58},{id:'bi3',category:'Subscriptions',name:'Netflix',amount:18,actual:18}]
   const checks=[{id:'p1',name:'Chris paycheck',owner:'Chris',amount:2400,frequency:'Semi-monthly',date:'2026-11-15'},{id:'p2',name:'Sarah paycheck',owner:'Sarah',amount:1800,frequency:'Monthly',date:'2026-11-20'}]
-  const saved=applyOps(original,differences(original,{...original,budgets:{Food:600,Utilities:300},budgetItems:items,paychecks:checks}),true)
+  const debts=[{id:'d1',name:'Chase Visa',category:'Credit Card',balance:3000,apr:24.99,minPayment:90,extraPayment:60,due:'2026-11-14',notes:''},{id:'d2',name:'Auto Loan',category:'Auto Loan',balance:1200,apr:6.5,minPayment:150,extraPayment:0,due:'2026-11-18',notes:''}]
+  const bills=[{id:'b1',title:'Electric',due:'2026-11-12',amount:120,paid:false}]
+  const saved=applyOps(original,differences(original,{...original,budgets:{Food:600,Utilities:300},budgetItems:items,paychecks:checks,debts,bills}),true)
   assert.equal(saved.budgetItems.length,3)
   assert.equal(saved.paychecks.length,2)
+  assert.equal(saved.debts.length,2)
   const pay=paycheckSummary(saved)
   assert.equal(pay.perCycle,4200)
   assert.equal(pay.monthly,6600,'2400*2 + 1800*1 flows as monthly income')
   assert.equal(pay.nextDate,'2026-11-15')
+  const dSum=debtSummary(saved)
+  assert.equal(dSum.totalBalance,4200)
+  assert.equal(dSum.totalMinPayment,240)
+  assert.equal(dSum.totalExtraPayment,60)
+  const av=simulateDebtPayoff(saved.debts,200,'avalanche')
+  const sn=simulateDebtPayoff(saved.debts,200,'snowball')
+  assert.equal(av.order[0].name,'Chase Visa','avalanche prioritizes highest APR')
+  assert.equal(sn.order[0].name,'Auto Loan','snowball prioritizes smallest balance')
+  assert(av.totalInterest <= sn.totalInterest,'avalanche saves at least as much interest as snowball')
+  assert(av.steps.length >= 3)
+  const snap=realtimeFinancialSnapshot(saved)
+  assert.equal(snap.availableOnNextPaycheck,4200)
+  assert.equal(snap.unpaidBillsThroughPayday,120)
+  assert.equal(snap.remainingAfterPaydayBills,4080)
   assert.throws(()=>applyOps(original,[{field:'budgetItems',id:'bad',before:null,value:{id:'bad',category:'Food',name:'',amount:10}}]),/Invalid budgetItems/)
   assert.throws(()=>applyOps(original,[{field:'paychecks',id:'badp',before:null,value:{id:'badp',name:'',amount:100}}]),/Invalid paychecks/)
+  assert.throws(()=>applyOps(original,[{field:'debts',id:'badd',before:null,value:{id:'badd',name:'',balance:100,apr:10,minPayment:10}}]),/Invalid debts/)
   const summary=categoryBudgets(saved,{Food:200})
   assert.equal(summary.find(x=>x.category==='Food').effective,600)
   assert.equal(summary.find(x=>x.category==='Food').actual,200)

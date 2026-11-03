@@ -296,6 +296,32 @@ table.sheet tfoot td { padding: 11px 8px; font-weight: 700; border-top: 1px soli
 .install-app-btn { white-space: nowrap; font-size: 12.5px; padding: 8px 12px; }
 .install-banner { margin-bottom: 16px; border-color: var(--border-strong); }
 
+.ai-command-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 18px;
+  background: linear-gradient(90deg, rgba(14, 30, 22, 0.92), rgba(9, 20, 22, 0.92));
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(56, 245, 167, 0.14);
+}
+.ai-command-bar input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(5, 10, 8, 0.75);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 9px 12px;
+  color: var(--text);
+  font-size: 13.5px;
+}
+.ai-command-bar input:focus {
+  outline: 2px solid var(--green);
+  outline-offset: -1px;
+}
+
 @media (max-width: 680px) {
   .app {
     padding-top: max(16px, env(safe-area-inset-top));
@@ -326,6 +352,9 @@ table.sheet tfoot td { padding: 11px 8px; font-weight: 700; border-top: 1px soli
   .family-toolbar .btn { width: 100%; min-height: 44px; font-size: 14px; }
   .waterfall-row { flex-direction: column; align-items: flex-start; gap: 6px; }
   .waterfall-amt { align-self: flex-end; }
+  .ai-command-bar { flex-wrap: wrap; padding: 10px; }
+  .ai-command-bar input { flex: 1 1 100%; width: 100%; }
+  .ai-command-bar .btn { width: 100%; min-height: 42px; }
   .ai-dock {
     right: max(14px, env(safe-area-inset-right));
     bottom: calc(16px + env(safe-area-inset-bottom));
