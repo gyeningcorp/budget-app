@@ -87,26 +87,33 @@ export async function createApp({ databasePath, baseURL, secret, production = fa
     db.prepare("DELETE FROM members WHERE user_id=? AND household_id=? AND role='member'").run(String(req.body.userId), req.member.household_id); res.json({ ok: true })
   })
   app.post('/api/family/ai-key', needOwner, (req, res) => {
-    const key=String(req.body.key || '').trim(), hid=req.member.household_id
-    if (!key) db.prepare('DELETE FROM ai_settings WHERE household_id=?').run(hid)
-    else { if (!key.startsWith('sk-ant-') || key.length<20 || key.length>500 || /\s/.test(key)) return res.status(400).json({error:'Enter a valid Anthropic API key.'}); db.prepare('INSERT INTO ai_settings VALUES(?,?) ON CONFLICT(household_id) DO UPDATE SET encrypted_key=excluded.encrypted_key').run(hid,encryptKey(key,hid)) }
-    res.json({configured:!!key})
+    const raw=String(req.body.key || '').trim().replace(/^Bearer\s+/i, '').trim(), hid=req.member.household_id
+    if (!raw) db.prepare('DELETE FROM ai_settings WHERE household_id=?').run(hid)
+    else { if (!raw.startsWith('sk-ant-') || raw.length<20 || raw.length>500 || /\s/.test(raw)) return res.status(400).json({error:'Enter a valid Claude subscription token (sk-ant-oat01-…) or Anthropic key (sk-ant-…).'}); db.prepare('INSERT INTO ai_settings VALUES(?,?) ON CONFLICT(household_id) DO UPDATE SET encrypted_key=excluded.encrypted_key').run(hid,encryptKey(raw,hid)) }
+    res.json({configured:!!raw, subscription: raw.startsWith('sk-ant-oat')})
   })
+  const ALLOWED_MODELS = new Set(['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5'])
   async function callClaude(hid, payload) {
     const setting=db.prepare('SELECT encrypted_key FROM ai_settings WHERE household_id=?').get(hid)
-    if (!setting) throw Object.assign(new Error('Ask the household owner to add a Claude API key in Family settings.'),{status:400})
+    if (!setting) throw Object.assign(new Error('Ask the household owner to connect your Claude subscription token or key in Family settings.'),{status:400})
     const day=new Date().toISOString().slice(0,10), usage=db.prepare('SELECT requests FROM ai_usage WHERE household_id=? AND day=?').get(hid,day)
     if ((usage?.requests || 0)>=100) throw Object.assign(new Error('Your household reached its 100-request daily AI limit. Try again tomorrow.'),{status:429})
     db.prepare('INSERT INTO ai_usage VALUES(?,?,1) ON CONFLICT(household_id,day) DO UPDATE SET requests=requests+1').run(hid,day)
-    const upstream=await aiFetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','anthropic-version':'2023-06-01','x-api-key':decryptKey(setting.encrypted_key,hid)},body:JSON.stringify({...payload,model:process.env.CLAUDE_MODEL || 'claude-sonnet-4-6',max_tokens:Math.min(Math.max(Number(payload.max_tokens)||1024,1),2048)}),signal:AbortSignal.timeout(45000)})
-    if (!upstream.ok) throw Object.assign(new Error(`Claude could not complete the request (HTTP ${upstream.status}). Check the API key, credits and model access in Anthropic.`),{status:upstream.status===401?400:502})
+    const token=decryptKey(setting.encrypted_key,hid)
+    const isSub=token.startsWith('sk-ant-oat')
+    const authHeaders=isSub
+      ? {'authorization':`Bearer ${token}`,'anthropic-beta':'oauth-2025-04-20'}
+      : {'x-api-key':token}
+    const chosenModel=ALLOWED_MODELS.has(payload.model) ? payload.model : (process.env.CLAUDE_MODEL || 'claude-sonnet-4-6')
+    const upstream=await aiFetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','anthropic-version':'2023-06-01',...authHeaders},body:JSON.stringify({...payload,model:chosenModel,max_tokens:Math.min(Math.max(Number(payload.max_tokens)||1024,1),2048)}),signal:AbortSignal.timeout(45000)})
+    if (!upstream.ok) throw Object.assign(new Error(`Claude could not complete the request (HTTP ${upstream.status}). Check your Claude subscription token or key in Family settings.`),{status:upstream.status===401?400:502})
     return upstream.json()
   }
   app.post('/api/family/ai', needFamily, async (req,res) => {
     try {
-      const {messages,system,tools}=req.body
-      if (!Array.isArray(messages) || messages.length<1 || messages.length>60 || JSON.stringify(messages).length>150000 || (system&&typeof system!=='string') || (system&&system.length>30000) || (tools&&(!Array.isArray(tools)||tools.length>20))) return res.status(400).json({error:'The AI conversation is too long. Start a new conversation.'})
-      res.json(await callClaude(req.member.household_id,{messages,system,tools,max_tokens:req.body.max_tokens}))
+      const {messages,system,tools,model}=req.body
+      if (!Array.isArray(messages) || messages.length<1 || messages.length>60 || JSON.stringify(messages).length>150000 || (system&&typeof system!=='string') || (system&&system.length>30000) || (tools&&(!Array.isArray(tools)||tools.length>40))) return res.status(400).json({error:'The AI conversation is too long. Start a new conversation.'})
+      res.json(await callClaude(req.member.household_id,{messages,system,tools,model,max_tokens:req.body.max_tokens}))
     } catch(error) { res.status(error.status||502).json({error:error.status?error.message:'The AI request could not be completed. Please try again.'}) }
   })
   const billing=registerBilling(app,{db,needFamily,needOwner,encryptKey,decryptKey,callClaude,billFetch})

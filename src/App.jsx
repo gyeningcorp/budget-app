@@ -5,7 +5,7 @@ import Account from './Account'
 import DateNights from './DateNights'
 import HomePlanning from './HomePlanning'
 import BillAccounts from './BillAccounts'
-import { claudeRequest } from './claude'
+import { CLAUDE_SUBSCRIPTION_MODELS, claudeRequest, openInClaudeSubscription } from './claude'
 import { sharedState } from '../shared/sync'
 import {
   DEBT_CATEGORIES,
@@ -47,6 +47,7 @@ const SEED = {
   paychecks: [],
   paycheckPlan: {},
   debts: [],
+  claudeModel: 'claude-sonnet-4-6',
   apiKey: '',
   bank: { url: '', secret: '' },
 }
@@ -1259,14 +1260,36 @@ function Advisor({ state, setState, totals, setTab }) {
 
   return (
     <div className="card" style={{ marginTop: 18 }}>
-      <h3>AI Money Advisor & Real-Time Controller</h3>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+        <h3 style={{ margin: 0 }}>AI Money Advisor & Real-Time Controller · {state.claudeModel || 'claude-sonnet-4-6'}</h3>
+        <div className="row" style={{ gap: 8 }}>
+          <select
+            aria-label="Claude subscription model"
+            value={state.claudeModel || 'claude-sonnet-4-6'}
+            onChange={(e) => mutateState((s) => ({ ...s, claudeModel: e.target.value }))}
+            style={{ width: 'auto', padding: '6px 10px', fontSize: 12.5 }}
+          >
+            {CLAUDE_SUBSCRIPTION_MODELS.map((m) => (
+              <option key={m.id} value={m.id}>{m.label}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="btn ghost"
+            onClick={() => openInClaudeSubscription(input, buildContext())}
+            title="Copies your live household snapshot + question and opens your Claude.ai Pro/Max subscription"
+          >
+            💬 Talk in Claude.ai Subscription ↗
+          </button>
+        </div>
+      </div>
       {!hasKey && (
-        <div className="callout" style={{ marginBottom: 12 }}>
-          <b>Instant Local Mode Active:</b> You can already ask to add bills due on any date, check real-time remaining paycheck cashflow, or calculate your best debt payoff steps below. Add your <b>Anthropic API key</b> in <b>Family settings</b> or <b>Settings</b> anytime to unlock full Claude conversational reasoning.
+        <div className="callout" style={{ marginBottom: 12, marginTop: 10 }}>
+          <b>Claude Subscription Support + Instant Local Control:</b> Connect your <b>Claude Pro / Max subscription token</b> (run <code>claude setup-token</code> to get <code>sk-ant-oat01-…</code>) in <b>Family settings</b> or <b>Settings</b>—or click <b>💬 Talk in Claude.ai Subscription ↗</b> above to chat in your Claude subscription with your live household numbers pre-copied!
         </div>
       )}
 
-      <div className="row" style={{ gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+      <div className="row" style={{ gap: 8, marginBottom: 12, marginTop: 10, flexWrap: 'wrap' }}>
         <button type="button" className="btn ghost" onClick={() => send('What is left on my next paycheck and monthly budget right now?')}>
           📊 What’s left right now?
         </button>
@@ -1506,16 +1529,29 @@ function Settings({ state, update, setState, openFamily, onInstall, isStandalone
       </div>
 
       <div className="card" style={{ marginTop: 14 }}>
-        <h3>{state._cloud ? 'Shared Claude API key' : 'Anthropic API key'}</h3>
-        {state._cloud ? <><p>Configure one key for everyone in your household under Family settings.</p><button className="btn" onClick={openFamily}>Open family AI settings</button></> : <>
+        <h3>{state._cloud ? 'Shared Claude Subscription & Model' : 'Claude Subscription Model & Token'}</h3>
+        <div className="row" style={{ marginBottom: 12 }}>
+          <div className="field" style={{ flex: 2 }}>
+            <label htmlFor="settings-claude-model">Claude Subscription Model</label>
+            <select
+              id="settings-claude-model"
+              value={state.claudeModel || 'claude-sonnet-4-6'}
+              onChange={(e) => update({ claudeModel: e.target.value })}
+            >
+              {CLAUDE_SUBSCRIPTION_MODELS.map((m) => (
+                <option key={m.id} value={m.id}>{m.label}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        {state._cloud ? <><p>Configure your shared Claude Pro / Max subscription token (<code>sk-ant-oat01-…</code> from <code>claude setup-token</code>) or key for everyone in your household under Family settings.</p><button className="btn" onClick={openFamily}>Open family AI settings</button></> : <>
         <div className="callout" style={{ marginBottom: 12 }}>
-          Stored only in <b>this browser</b>. Requests go straight from your browser to Anthropic. Get a key at{' '}
-          <b>console.anthropic.com</b>.
+          <b>Use your Claude Pro / Max Subscription:</b> Run <code>claude setup-token</code> in your terminal to generate your subscription OAuth token (<code>sk-ant-oat01-…</code>) and paste it below so the app talks through your Claude subscription (or paste a standard <code>sk-ant-…</code> key). Stored only in <b>this browser</b>.
         </div>
         <div className="row">
           <div className="field" style={{ flex: 3 }}>
-            <label>Key (sk-ant-…)</label>
-            <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-ant-..." />
+            <label>Claude Subscription Token or Key (sk-ant-oat01-… / sk-ant-…)</label>
+            <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-ant-oat01-..." />
           </div>
           <button className="btn" onClick={save}>{saved ? 'Saved ✓' : 'Save key'}</button>
         </div></>}
@@ -2861,8 +2897,15 @@ function Assistant({ state, setState, totals, page, setTab, queuedPrompt, onCons
       {open && (
         <div className="ai-panel">
           <div className="ai-head">
-            <span>📚 Ask Rory · Live App Control ({page})</span>
+            <span>📚 Ask Rory · {state.claudeModel || 'claude-sonnet-4-6'}</span>
             <div className="ai-head-tools">
+              <button
+                className="ai-x"
+                title="Open in Claude.ai Subscription with your live household snapshot"
+                onClick={() => openInClaudeSubscription(input, systemPrompt())}
+              >
+                💬 Claude.ai ↗
+              </button>
               {convo.length > 0 && (
                 <button className="ai-x" title="Clear chat" onClick={() => setConvo([])}>⟲</button>
               )}
@@ -2872,7 +2915,7 @@ function Assistant({ state, setState, totals, page, setTab, queuedPrompt, onCons
 
           {!hasKey && (
             <div className="callout" style={{ margin: 10 }}>
-              <b>Instant Smart Control Active:</b> Ask about bills due, what’s left on your paycheck, or debt payoff steps below! Add a <b>Claude API key</b> in <b>Family settings</b> or <b>Settings</b> anytime for full AI reasoning.
+              <b>Claude Subscription + Instant Control:</b> Connect your <b>Claude Pro / Max subscription token</b> (<code>sk-ant-oat01-…</code> from <code>claude setup-token</code>) in <b>Family settings</b> or <b>Settings</b>, click <b>💬 Claude.ai ↗</b> above, or type below for instant smart app adjustments!
             </div>
           )}
 
