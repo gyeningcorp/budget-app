@@ -890,6 +890,18 @@ function Budgets({ state, update, byCat }) {
                 <div className="bar">
                   <span className={over ? 'over' : ''} style={{ width: pct + '%' }} />
                 </div>
+                {catItems.length === 0 && (
+                  <div style={{ marginTop: 4 }}>
+                    <button
+                      type="button"
+                      className="btn ghost"
+                      style={{ padding: '6px 11px', fontSize: 12 }}
+                      onClick={() => update({ budgetItems: [...items, { id: crypto.randomUUID(), category: c, name: 'New item', amount: 0, actual: 0, notes: '' }] })}
+                    >
+                      + Add line item row in {c}
+                    </button>
+                  </div>
+                )}
                 {catItems.length > 0 && (
                   <div className="sheet-wrap budget-sheet-wrap" style={{ marginTop: 6 }}>
                     <table className="sheet budget-sheet">
@@ -944,6 +956,14 @@ function Budgets({ state, update, byCat }) {
                       <tfoot>
                         <tr>
                           <td colSpan={2}>
+                            <button
+                              type="button"
+                              className="btn ghost"
+                              style={{ padding: '5px 10px', fontSize: 12, marginRight: 10 }}
+                              onClick={() => update({ budgetItems: [...items, { id: crypto.randomUUID(), category: c, name: 'New item', amount: 0, actual: 0, notes: '' }] })}
+                            >
+                              + Add row
+                            </button>
                             {c} line-item total {txSpent > 0 ? `(ledger transactions in ${c}: ${fmt(txSpent)})` : ''}
                           </td>
                           <td className="num">{fmt(limit)}</td>

@@ -78,9 +78,11 @@ export function registerBilling(app, { db, needFamily, needOwner, encryptKey, de
         if(db.prepare('SELECT status FROM bill_connections WHERE household_id=? AND provider_key=?').get(hid,providerId)?.status==='paused') throw fail('Automatic imports were paused before this check completed.',409)
         const current = JSON.parse(db.prepare('SELECT data FROM households WHERE id=?').get(hid).data), bills = current.bills || []
         for (const [account, s] of latest) {
-          const id = `connected-bill-${providerId}-${account}`, previous = bills.find(b => b.id === id), sameStatement = previous?.externalId === s.id
+          const id = `connected-bill-${providerId}-${account}`
+          const previous = bills.find(b => b.id === id) || bills.find(b => b.providerId === providerId && b.due === s.dueDate && b.source === 'statement_import')
+          const sameStatement = previous?.externalId === s.id || (previous?.source === 'statement_import' && previous?.due === s.dueDate)
           const next = { ...previous, id, title: providerById(providerId).name, due: s.dueDate, amount: s.amountDue, paid: sameStatement ? previous.paid : false, providerId, source: 'arcadia', externalId: s.id, statementDate: validDay(s.statementDate) ? s.statementDate : '', importedAt: new Date(now).toISOString() }
-          const position = bills.findIndex(b => b.id === id); if (position < 0) bills.push(next); else bills[position] = next; updated++
+          const position = bills.findIndex(b => b.id === (previous?.id || id)); if (position < 0) bills.push(next); else bills[position] = next; updated++
         }
         if (updated) { current.bills = bills; db.prepare('UPDATE households SET data=?,revision=revision+1 WHERE id=?').run(JSON.stringify(current), hid) }
         db.prepare('UPDATE bill_connections SET status=?,last_checked=?,last_received=CASE WHEN ? THEN ? ELSE last_received END,last_error=NULL WHERE household_id=? AND provider_key=?').run(updated ? 'statements_received' : 'awaiting_statements', now, updated, now, hid, providerId)
@@ -97,6 +99,14 @@ export function registerBilling(app, { db, needFamily, needOwner, encryptKey, de
     } catch (e) { res.status(e.status || 502).json({ error: e.status ? e.message : 'The statement check could not be completed.' }) }
   })
   app.post('/api/family/billing/pause', needOwner, (req, res) => { db.prepare("UPDATE bill_connections SET status='paused' WHERE household_id=? AND provider_key=?").run(req.member.household_id, String(req.body.providerId)); res.json({ paused: true }) })
+  app.post('/api/family/billing/resume', needOwner, (req, res) => {
+    const hid = req.member.household_id, providerId = String(req.body.providerId)
+    const row = db.prepare('SELECT * FROM bill_connections WHERE household_id=? AND provider_key=?').get(hid, providerId)
+    if (!row) return res.status(400).json({ error: 'Start account authorization first.' })
+    const nextStatus = row.last_received ? 'statements_received' : 'awaiting_statements'
+    db.prepare('UPDATE bill_connections SET status=?,last_error=NULL WHERE household_id=? AND provider_key=?').run(nextStatus, hid, providerId)
+    res.json({ resumed: true, status: nextStatus })
+  })
   app.post('/api/family/billing/extract', needFamily, async (req, res) => {
     try {
       const provider = providerById(req.body.providerId), { file, text } = req.body

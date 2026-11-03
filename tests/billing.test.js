@@ -47,6 +47,8 @@ test('bill connections and extraction are private, consented, deduplicated and i
   const own=await request('owner','/api/family/state');assert.equal(own.data.state.bills.length,1);assert.equal(own.data.state.bills[0].amount,85.42);assert.equal((await request('outsider','/api/family/state')).data.state.bills.length,0)
   invalidAuth=true;assert.equal((await request('owner','/api/family/billing/settings',keys)).status,400);assert.equal((await request('owner','/api/family/billing')).data.configured,true);invalidAuth=false
   await request('owner','/api/family/billing/pause',{providerId:'columbia-gas'});assert.equal((await request('owner','/api/family/billing/sync',{providerId:'columbia-gas'})).status,400)
+  const resumed=await request('owner','/api/family/billing/resume',{providerId:'columbia-gas'});assert.equal(resumed.status,200);assert.equal(resumed.data.resumed,true)
+  assert.equal((await request('owner','/api/family/billing/sync',{providerId:'columbia-gas'})).data.imported,1)
   await request('owner','/api/family/ai-key',{key:'sk-ant-fake-test-bill-key-only'})
   const bill={providerId:'columbia-gas',text:'Columbia Gas amount due $85.42 on November 23, 2026',consent:true}
   assert.equal((await request('member','/api/family/billing/extract',{...bill,consent:false})).status,400);assert.equal(aiCalls,0)
