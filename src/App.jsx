@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import Family from './Family'
+import Family from './Family.jsx'
 import useHousehold from './useHousehold'
 import Account from './Account'
 import DateNights from './DateNights'
@@ -7,6 +7,7 @@ import HomePlanning from './HomePlanning'
 import BillAccounts from './BillAccounts'
 import { claudeRequest } from './claude'
 import { sharedState } from '../shared/sync'
+import { allCategories, canonicalCategory, categoryBudgets } from '../shared/budgets'
 import { dateKey } from './family.js'
 
 const LS_KEY = 'hog-budget-v1'
@@ -24,10 +25,12 @@ const SEED = {
     { id: 't4', desc: 'Gas', amount: 52.1, category: 'Transport', type: 'expense', date: todayISO() },
   ],
   budgets: { Food: 600, Transport: 250, Fun: 200, Utilities: 300 },
+  budgetItems: [],
   familyEvents: [],
   familyProjects: [],
   dateNights: [],
   groceries: [],
+  groceryStaples: [],
   meals: [],
   bills: [],
   billAccounts: [],
@@ -333,7 +336,7 @@ export default function App() {
       {tab === 'Bill accounts' && <BillAccounts sync={sync} onNavigate={setTab} />}
       {tab === 'Date nights' && <DateNights state={state} setState={setState} />}
       {['Groceries', 'Meals', 'Paychecks'].includes(tab) && <HomePlanning tab={tab} state={state} setState={setState} />}
-      {tab === 'Dashboard' && <Dashboard totals={totals} transactions={state.transactions} />}
+      {tab === 'Dashboard' && <Dashboard state={state} totals={totals} transactions={state.transactions} onNavigate={setTab} />}
       {tab === 'Transactions' && <Transactions state={state} setState={setState} />}
       {tab === 'Budgets' && <Budgets state={state} update={update} byCat={totals.byCat} />}
       {tab === 'Advisor' && <Advisor state={state} totals={totals} />}
@@ -347,27 +350,89 @@ export default function App() {
   )
 }
 
-function Dashboard({ totals, transactions }) {
+function Dashboard({ state, totals, transactions, onNavigate }) {
   const recent = [...transactions].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6)
   const cats = Object.entries(totals.byCat).sort((a, b) => b[1] - a[1])
+  const budgetSummary = categoryBudgets(state, totals.byCat)
+  const totalBudgeted = budgetSummary.reduce((s, b) => s + b.effective, 0)
+  const totalBudgetSpent = budgetSummary.reduce((s, b) => s + b.actual, 0)
+  const budgetPct = totalBudgeted > 0 ? Math.min(100, Math.round((totalBudgetSpent / totalBudgeted) * 100)) : 0
+  const savingsRate = totals.income > 0 ? Math.round(((totals.income - totals.expense) / totals.income) * 100) : 0
+  const unpaidBills = (state.bills || []).filter((b) => !b.paid).sort((a, b) => a.due.localeCompare(b.due))
+  const unpaidTotal = unpaidBills.reduce((s, b) => s + (Number(b.amount) || 0), 0)
+  const openGroceries = (state.groceries || []).filter((g) => !g.checked).length
+  const stapleCount = (state.groceryStaples || []).length
+  const activeProjects = (state.familyProjects || []).filter((p) => p.status !== 'Done').length
+  const upcomingDates = (state.dateNights || []).filter((d) => d.status === 'Planned' && d.date >= todayISO()).sort((a, b) => a.date.localeCompare(b.date))
+
   return (
     <>
-      <div className="grid cols-3">
+      <div className="hud-banner">
+        <div className="hud-banner-left">
+          <span className="hud-tag">LIVE HOUSEHOLD TELEMETRY</span>
+          <h2>Command Overview</h2>
+          <p className="muted">Real-time cashflow, itemized budgets, upcoming utility obligations, and family logistics.</p>
+        </div>
+        <div className="hud-metrics">
+          <div className="hud-chip">
+            <span>SAVINGS RATE</span>
+            <strong className={savingsRate >= 20 ? 'pos' : savingsRate >= 0 ? '' : 'neg'}>{savingsRate}%</strong>
+          </div>
+          <div className="hud-chip">
+            <span>BUDGET UTILIZATION</span>
+            <strong className={budgetPct > 100 ? 'neg' : 'pos'}>{budgetPct}%</strong>
+          </div>
+          <div className="hud-chip">
+            <span>UNPAID BILLS</span>
+            <strong>{unpaidBills.length} · {fmt(unpaidTotal)}</strong>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid cols-4">
         <div className="card">
           <h3>Income</h3>
           <div className="stat pos">{fmt(totals.income)}</div>
-          <div className="muted">all recorded</div>
+          <div className="muted">{transactions.filter((t) => t.type === 'income').length} inflow entries</div>
         </div>
         <div className="card">
           <h3>Spending</h3>
           <div className="stat neg">{fmt(totals.expense)}</div>
-          <div className="muted">all recorded</div>
+          <div className="muted">{transactions.filter((t) => t.type === 'expense').length} expense entries</div>
         </div>
         <div className="card">
-          <h3>Net</h3>
+          <h3>Net Cashflow</h3>
           <div className={'stat ' + (totals.net >= 0 ? 'pos' : 'neg')}>{fmt(totals.net)}</div>
-          <div className="muted">{totals.net >= 0 ? 'in the green' : 'overspending'}</div>
+          <div className="muted">{totals.net >= 0 ? `${savingsRate}% retained` : 'deficit alert'}</div>
         </div>
+        <div className="card">
+          <h3>Planned Budget</h3>
+          <div className="stat">{fmt(totalBudgeted)}</div>
+          <div className="muted">{fmt(Math.max(0, totalBudgeted - totalBudgetSpent))} remaining across {budgetSummary.length} categories</div>
+        </div>
+      </div>
+
+      <div className="grid cols-4 hud-ops">
+        <button type="button" className="hud-tile" onClick={() => onNavigate('Paychecks')}>
+          <span className="hud-tile-kicker">BILLS & PAYCHECKS</span>
+          <strong>{unpaidBills.length ? `${unpaidBills.length} due · ${fmt(unpaidTotal)}` : 'All bills clear'}</strong>
+          <small>{unpaidBills[0] ? `Next: ${unpaidBills[0].title} (${unpaidBills[0].due})` : 'No pending due dates'}</small>
+        </button>
+        <button type="button" className="hud-tile" onClick={() => onNavigate('Groceries')}>
+          <span className="hud-tile-kicker">SUPPLY & GROCERIES</span>
+          <strong>{openGroceries} to buy</strong>
+          <small>{stapleCount} saved on Always list</small>
+        </button>
+        <button type="button" className="hud-tile" onClick={() => onNavigate('Projects')}>
+          <span className="hud-tile-kicker">HOME PROJECTS</span>
+          <strong>{activeProjects} active</strong>
+          <small>{(state.familyProjects || []).length} total tracked</small>
+        </button>
+        <button type="button" className="hud-tile" onClick={() => onNavigate('Date nights')}>
+          <span className="hud-tile-kicker">DATE NIGHTS</span>
+          <strong>{upcomingDates.length} planned</strong>
+          <small>{upcomingDates[0] ? `Next: ${upcomingDates[0].title} (${upcomingDates[0].date})` : 'Tap to plan your next night out'}</small>
+        </button>
       </div>
 
       <div className="grid cols-2">
@@ -375,14 +440,26 @@ function Dashboard({ totals, transactions }) {
           <h3>Spending by category</h3>
           {cats.length === 0 && <div className="empty">No expenses yet.</div>}
           <div className="list">
-            {cats.map(([c, v]) => (
-              <div className="item" key={c}>
-                <div className="left">
-                  <span className="desc">{c}</span>
+            {cats.map(([c, v]) => {
+              const share = totals.expense > 0 ? Math.round((v / totals.expense) * 100) : 0
+              const limit = budgetSummary.find((b) => b.category.toLowerCase() === c.toLowerCase())?.effective || 0
+              const pct = limit > 0 ? Math.min(100, (v / limit) * 100) : share
+              const over = limit > 0 && v > limit
+              return (
+                <div className="item" key={c} style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div className="left">
+                      <span className="desc">{c}</span>
+                      <span className="meta">{share}% of total spending{limit > 0 ? ` · budget ${fmt(limit)}` : ''}</span>
+                    </div>
+                    <span className="amount expense">{fmt(v)}</span>
+                  </div>
+                  <div className="bar">
+                    <span className={over ? 'over' : ''} style={{ width: pct + '%' }} />
+                  </div>
                 </div>
-                <span className="amount expense">{fmt(v)}</span>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </div>
         <div className="card">
@@ -562,7 +639,7 @@ function Transactions({ state, setState }) {
                 </td>
                 <td>
                   <select value={t.category} onChange={(e) => editCell(t.id, 'category', e.target.value)}>
-                    {CATEGORIES.map((c) => (
+                    {allCategories(state).map((c) => (
                       <option key={c}>{c}</option>
                     ))}
                   </select>
@@ -595,39 +672,190 @@ function Transactions({ state, setState }) {
 
 function Budgets({ state, update, byCat }) {
   const [cat, setCat] = useState('Food')
+  const [customCat, setCustomCat] = useState('')
   const [amt, setAmt] = useState('')
+  const [itemCat, setItemCat] = useState('Utilities')
+  const [customItemCat, setCustomItemCat] = useState('')
+  const [itemName, setItemName] = useState('')
+  const [itemAmt, setItemAmt] = useState('')
+  const [itemActual, setItemActual] = useState('')
+  const [itemNotes, setItemNotes] = useState('')
+
+  const categories = allCategories(state).filter((c) => c.toLowerCase() !== 'income')
+  const entries = categoryBudgets(state, byCat)
+  const items = state.budgetItems || []
+  const totalPlanned = entries.reduce((s, e) => s + e.effective, 0)
+  const totalActual = entries.reduce((s, e) => s + e.actual, 0)
+  const totalVariance = totalPlanned - totalActual
 
   const setBudget = (e) => {
     e.preventDefault()
+    const chosen = cat === '__custom__' ? canonicalCategory(state, customCat) : cat
     const v = parseFloat(amt)
-    if (!v || v <= 0) return
-    update({ budgets: { ...state.budgets, [cat]: v } })
+    if (!chosen || chosen.toLowerCase() === 'income' || !v || v <= 0) return
+    update({ budgets: { ...state.budgets, [chosen]: v } })
     setAmt('')
+    if (cat === '__custom__') {
+      setCat(chosen)
+      setCustomCat('')
+    }
   }
   const removeBudget = (c) => {
     const next = { ...state.budgets }
     delete next[c]
-    update({ budgets: next })
+    const nextItems = (state.budgetItems || []).filter((x) => x.category.toLowerCase() !== c.toLowerCase())
+    update({ budgets: next, budgetItems: nextItems })
+  }
+  const addLineItem = (e) => {
+    e.preventDefault()
+    const chosen = itemCat === '__custom__' ? canonicalCategory(state, customItemCat) : itemCat
+    const name = itemName.trim()
+    const v = parseFloat(itemAmt)
+    const act = itemActual === '' ? 0 : parseFloat(itemActual)
+    if (!chosen || chosen.toLowerCase() === 'income' || !name || isNaN(v) || v < 0 || isNaN(act) || act < 0) return
+    const item = { id: crypto.randomUUID(), category: chosen, name, amount: v, actual: act, notes: itemNotes.trim() }
+    update({ budgetItems: [...items, item] })
+    setItemName('')
+    setItemAmt('')
+    setItemActual('')
+    setItemNotes('')
+    if (itemCat === '__custom__') {
+      setItemCat(chosen)
+      setCustomItemCat('')
+    }
+  }
+  const patchLineItem = (id, patch) => {
+    update({ budgetItems: items.map((x) => (x.id === id ? { ...x, ...patch } : x)) })
+  }
+  const removeLineItem = (id) => {
+    update({ budgetItems: items.filter((x) => x.id !== id) })
   }
 
-  const entries = Object.entries(state.budgets)
   return (
     <>
-      <div className="card" style={{ marginTop: 18 }}>
-        <h3>Set a monthly budget</h3>
+      <div className="grid cols-3" style={{ marginTop: 18 }}>
+        <div className="card">
+          <h3>Total Planned</h3>
+          <div className="stat">{fmt(totalPlanned)}</div>
+          <div className="muted">{entries.length} budgeted categories · {items.length} line items</div>
+        </div>
+        <div className="card">
+          <h3>Total Actual</h3>
+          <div className="stat neg">{fmt(totalActual)}</div>
+          <div className="muted">combined line-item & ledger actuals</div>
+        </div>
+        <div className="card">
+          <h3>Variance</h3>
+          <div className={'stat ' + (totalVariance >= 0 ? 'pos' : 'neg')}>{fmt(totalVariance)}</div>
+          <div className="muted">{totalVariance >= 0 ? 'under planned budget' : 'over planned budget'}</div>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 14 }}>
+        <h3>Add a budget line item</h3>
+        <p className="muted" style={{ marginTop: 4, marginBottom: 12 }}>
+          Type each line item directly into your budget (for example Utilities → Columbia Gas, American Water, T-Mobile) with both a planned and actual amount, or edit any cell inline in the table below.
+        </p>
+        <form onSubmit={addLineItem}>
+          <div className="row">
+            <div className="field">
+              <label htmlFor="budget-item-cat">Line item category</label>
+              <select id="budget-item-cat" value={itemCat} onChange={(e) => setItemCat(e.target.value)}>
+                {categories.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+                <option value="__custom__">+ New category…</option>
+              </select>
+            </div>
+            {itemCat === '__custom__' && (
+              <div className="field">
+                <label htmlFor="budget-item-custom-cat">New category name</label>
+                <input
+                  id="budget-item-custom-cat"
+                  value={customItemCat}
+                  onChange={(e) => setCustomItemCat(e.target.value)}
+                  placeholder="e.g. Subscriptions, Kids, Pets"
+                  required
+                />
+              </div>
+            )}
+            <div className="field" style={{ flex: 2 }}>
+              <label htmlFor="budget-item-name">Line item</label>
+              <input
+                id="budget-item-name"
+                value={itemName}
+                onChange={(e) => setItemName(e.target.value)}
+                placeholder="e.g. Columbia Gas, Netflix, Daycare"
+                required
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="budget-item-amt">Planned ($)</label>
+              <input
+                id="budget-item-amt"
+                type="number"
+                step="0.01"
+                min="0"
+                value={itemAmt}
+                onChange={(e) => setItemAmt(e.target.value)}
+                placeholder="0.00"
+                required
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="budget-item-actual">Actual ($)</label>
+              <input
+                id="budget-item-actual"
+                type="number"
+                step="0.01"
+                min="0"
+                value={itemActual}
+                onChange={(e) => setItemActual(e.target.value)}
+                placeholder="0.00 (optional)"
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="budget-item-notes">Notes</label>
+              <input
+                id="budget-item-notes"
+                value={itemNotes}
+                onChange={(e) => setItemNotes(e.target.value)}
+                placeholder="Due 15th, autopay…"
+              />
+            </div>
+            <button className="btn" type="submit">Add line item</button>
+          </div>
+        </form>
+      </div>
+
+      <div className="card" style={{ marginTop: 14 }}>
+        <h3>Set a category monthly limit</h3>
         <form onSubmit={setBudget}>
           <div className="row">
             <div className="field">
-              <label>Category</label>
-              <select value={cat} onChange={(e) => setCat(e.target.value)}>
-                {CATEGORIES.filter((c) => c !== 'Income').map((c) => (
-                  <option key={c}>{c}</option>
+              <label htmlFor="budget-cat">Category</label>
+              <select id="budget-cat" value={cat} onChange={(e) => setCat(e.target.value)}>
+                {categories.map((c) => (
+                  <option key={c} value={c}>{c}</option>
                 ))}
+                <option value="__custom__">+ New category…</option>
               </select>
             </div>
+            {cat === '__custom__' && (
+              <div className="field">
+                <label htmlFor="budget-custom-cat">Category name</label>
+                <input
+                  id="budget-custom-cat"
+                  value={customCat}
+                  onChange={(e) => setCustomCat(e.target.value)}
+                  placeholder="e.g. Giving, Childcare"
+                  required
+                />
+              </div>
+            )}
             <div className="field">
-              <label>Limit</label>
-              <input type="number" step="0.01" value={amt} onChange={(e) => setAmt(e.target.value)} placeholder="0.00" />
+              <label htmlFor="budget-limit">Limit</label>
+              <input id="budget-limit" type="number" step="0.01" min="0" value={amt} onChange={(e) => setAmt(e.target.value)} placeholder="0.00" />
             </div>
             <button className="btn" type="submit">Save</button>
           </div>
@@ -638,17 +866,23 @@ function Budgets({ state, update, byCat }) {
         <h3>Budgets vs. actual</h3>
         {entries.length === 0 && <div className="empty">No budgets set yet.</div>}
         <div className="list">
-          {entries.map(([c, limit]) => {
-            const spent = byCat[c] || 0
-            const pct = Math.min(100, (spent / limit) * 100)
-            const over = spent > limit
+          {entries.map(({ category: c, effective: limit, actual: spent, txSpent, itemActualSum, items: catItems }) => {
+            const pct = limit > 0 ? Math.min(100, (spent / limit) * 100) : spent > 0 ? 100 : 0
+            const over = limit > 0 && spent > limit
             return (
-              <div className="item" key={c} style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span className="desc">{c}</span>
+              <div className="item budget-category-block" key={c} style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                  <span className="desc">
+                    {c}{' '}
+                    {catItems.length > 0 && (
+                      <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>
+                        ({catItems.length} line {catItems.length === 1 ? 'item' : 'items'})
+                      </span>
+                    )}
+                  </span>
                   <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
                     <span className="meta">
-                      {fmt(spent)} / {fmt(limit)} {over && <b style={{ color: 'var(--red)' }}>over</b>}
+                      {fmt(spent)} / {fmt(limit)} · <b style={{ color: limit - spent >= 0 ? 'var(--green)' : 'var(--red)' }}>{fmt(limit - spent)} {limit - spent >= 0 ? 'left' : 'over'}</b> {over && <b style={{ color: 'var(--red)' }}>over</b>}
                     </span>
                     <button className="btn danger" onClick={() => removeBudget(c)}>Remove</button>
                   </div>
@@ -656,6 +890,73 @@ function Budgets({ state, update, byCat }) {
                 <div className="bar">
                   <span className={over ? 'over' : ''} style={{ width: pct + '%' }} />
                 </div>
+                {catItems.length > 0 && (
+                  <div className="sheet-wrap budget-sheet-wrap" style={{ marginTop: 6 }}>
+                    <table className="sheet budget-sheet">
+                      <thead>
+                        <tr>
+                          <th>Line item (click to type)</th>
+                          <th>Notes</th>
+                          <th className="num" style={{ width: 120 }}>Planned ($)</th>
+                          <th className="num" style={{ width: 120 }}>Actual ($)</th>
+                          <th className="num" style={{ width: 110 }}>Diff</th>
+                          <th style={{ width: 44 }} />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {catItems.map((it) => {
+                          const act = Number(it.actual) || 0
+                          const diff = (Number(it.amount) || 0) - act
+                          return (
+                            <tr key={it.id}>
+                              <td>
+                                <input
+                                  aria-label={`${c} line item name`}
+                                  value={it.name}
+                                  placeholder="Line item name…"
+                                  onChange={(e) => patchLineItem(it.id, { name: e.target.value })}
+                                />
+                              </td>
+                              <td>
+                                <input
+                                  aria-label={`${it.name} notes`}
+                                  value={it.notes || ''}
+                                  placeholder="notes / due day…"
+                                  onChange={(e) => patchLineItem(it.id, { notes: e.target.value })}
+                                />
+                              </td>
+                              <td className="num">
+                                <AmountCell value={it.amount} type="expense" onCommit={(n) => patchLineItem(it.id, { amount: n })} />
+                              </td>
+                              <td className="num">
+                                <AmountCell value={act} type="expense" onCommit={(n) => patchLineItem(it.id, { actual: n })} />
+                              </td>
+                              <td className="num" style={{ padding: '0 8px', fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: diff >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                                {diff >= 0 ? '+' : ''}{fmt(diff)}
+                              </td>
+                              <td className="rowtools">
+                                <button title="Remove line item" aria-label={`Remove ${it.name}`} onClick={() => removeLineItem(it.id)}>✕</button>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr>
+                          <td colSpan={2}>
+                            {c} line-item total {txSpent > 0 ? `(ledger transactions in ${c}: ${fmt(txSpent)})` : ''}
+                          </td>
+                          <td className="num">{fmt(limit)}</td>
+                          <td className="num">{fmt(itemActualSum)}</td>
+                          <td className="num" style={{ color: limit - itemActualSum >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                            {fmt(limit - itemActualSum)}
+                          </td>
+                          <td />
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                )}
               </div>
             )
           })}
@@ -683,9 +984,9 @@ function Advisor({ state, totals }) {
           .map(([c, v]) => `${c} ${fmt(v)}`)
           .join(', '),
       'Budgets: ' +
-        Object.entries(state.budgets)
-          .map(([c, v]) => `${c} ${fmt(v)}`)
-          .join(', '),
+        categoryBudgets(state)
+          .map(({ category, effective, items }) => `${category} ${fmt(effective)}${items.length ? ` (${items.map((i) => `${i.name} ${fmt(i.amount)}`).join(', ')})` : ''}`)
+          .join('; '),
     ]
     return lines.join('\n')
   }
@@ -1000,7 +1301,7 @@ const AI_TOOLS = [
         desc: { type: 'string', description: 'Short description, e.g. "Groceries"' },
         amount: { type: 'number', description: 'Positive dollar amount' },
         type: { type: 'string', enum: ['income', 'expense'] },
-        category: { type: 'string', enum: CATEGORIES },
+        category: { type: 'string', description: 'Spending or income category (default or custom)' },
         date: { type: 'string', description: 'YYYY-MM-DD; defaults to today if omitted' },
       },
       required: ['desc', 'amount', 'type'],
@@ -1016,7 +1317,7 @@ const AI_TOOLS = [
         desc: { type: 'string' },
         amount: { type: 'number' },
         type: { type: 'string', enum: ['income', 'expense'] },
-        category: { type: 'string', enum: CATEGORIES },
+        category: { type: 'string', description: 'Spending or income category (default or custom)' },
         date: { type: 'string', description: 'YYYY-MM-DD' },
       },
       required: ['id'],
@@ -1029,15 +1330,35 @@ const AI_TOOLS = [
   },
   {
     name: 'set_budget',
-    description: 'Create or update a monthly budget limit for a spending category.',
+    description: 'Create or update a monthly budget limit for a spending category (default or custom).',
     input_schema: {
       type: 'object',
       properties: {
-        category: { type: 'string', enum: CATEGORIES.filter((c) => c !== 'Income') },
+        category: { type: 'string', description: 'Category name, e.g. Food, Utilities, Subscriptions' },
         limit: { type: 'number', description: 'Monthly limit in dollars, > 0' },
       },
       required: ['category', 'limit'],
     },
+  },
+  {
+    name: 'add_budget_item',
+    description: 'Add a line item inside a budget category (for example Utilities -> Columbia Gas planned $90, actual $85.42).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        category: { type: 'string', description: 'Category name (existing or new custom category)' },
+        name: { type: 'string', description: 'Line item name, e.g. Columbia Gas, Netflix, Daycare' },
+        amount: { type: 'number', description: 'Planned monthly amount in dollars, >= 0' },
+        actual: { type: 'number', description: 'Optional actual dollar amount spent on this line item, >= 0' },
+        notes: { type: 'string', description: 'Optional note or due day' },
+      },
+      required: ['category', 'name', 'amount'],
+    },
+  },
+  {
+    name: 'remove_budget_item',
+    description: 'Remove a budget line item by its id.',
+    input_schema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
   },
   {
     name: 'remove_budget',
@@ -1060,8 +1381,8 @@ function runAiTool(name, input, setState, stateRef, setTab) {
   switch (name) {
     case 'add_transaction': {
       const type = input.type === 'income' ? 'income' : 'expense'
-      const category = CATEGORIES.includes(input.category)
-        ? input.category
+      const category = input.category && String(input.category).trim()
+        ? canonicalCategory(stateRef.current, input.category)
         : type === 'income'
         ? 'Income'
         : guessCategory(input.desc)
@@ -1095,22 +1416,41 @@ function runAiTool(name, input, setState, stateRef, setTab) {
       return `Deleted ${input.id} ("${cur.desc}" ${fmt(cur.amount)}).`
     }
     case 'set_budget': {
-      const c = input.category
-      if (!CATEGORIES.includes(c) || c === 'Income') return `Invalid category "${c}".`
+      const c = canonicalCategory(stateRef.current, input.category)
+      if (!c || c.toLowerCase() === 'income') return `Invalid category "${input.category}".`
       const v = Number(input.limit)
       if (!(v > 0)) return `Limit must be greater than 0.`
       setState((s) => ({ ...s, budgets: { ...s.budgets, [c]: v } }))
       return `Set ${c} budget to ${fmt(v)}.`
     }
+    case 'add_budget_item': {
+      const c = canonicalCategory(stateRef.current, input.category)
+      const name = String(input.name || '').trim()
+      const amount = Number(input.amount)
+      const actual = input.actual != null ? Math.max(0, Number(input.actual) || 0) : 0
+      const notes = input.notes ? String(input.notes).trim() : ''
+      if (!c || c.toLowerCase() === 'income' || !name || !(amount >= 0)) return `Invalid budget line item.`
+      const item = { id: crypto.randomUUID(), category: c, name, amount, actual, notes }
+      setState((s) => ({ ...s, budgetItems: [...(s.budgetItems || []), item] }))
+      return `Added budget line item "${name}" (planned ${fmt(amount)}, actual ${fmt(actual)}) under ${c} (id ${item.id}).`
+    }
+    case 'remove_budget_item': {
+      const cur = (stateRef.current.budgetItems || []).find((x) => x.id === input.id)
+      if (!cur) return `No budget line item with id ${input.id}.`
+      setState((s) => ({ ...s, budgetItems: (s.budgetItems || []).filter((x) => x.id !== input.id) }))
+      return `Removed budget line item "${cur.name}" from ${cur.category}.`
+    }
     case 'remove_budget': {
-      const c = input.category
-      if (stateRef.current.budgets[c] == null) return `No budget set for "${c}".`
-      if (!confirm(`Remove the ${c} budget (${fmt(stateRef.current.budgets[c])})?`))
+      const c = canonicalCategory(stateRef.current, input.category)
+      const hasLimit = stateRef.current.budgets[c] != null
+      const hasItems = (stateRef.current.budgetItems || []).some((x) => x.category.toLowerCase() === c.toLowerCase())
+      if (!hasLimit && !hasItems) return `No budget set for "${c}".`
+      if (!confirm(`Remove the ${c} budget?`))
         return `User declined — ${c} budget was NOT removed.`
       setState((s) => {
         const next = { ...s.budgets }
         delete next[c]
-        return { ...s, budgets: next }
+        return { ...s, budgets: next, budgetItems: (s.budgetItems || []).filter((x) => x.category.toLowerCase() !== c.toLowerCase()) }
       })
       return `Removed ${c} budget.`
     }
@@ -1158,11 +1498,11 @@ function Assistant({ state, setState, totals, page, setTab }) {
       'To edit or delete a specific transaction, use its id from the list below. ' +
       'After acting, confirm what you changed in one short sentence. Be concise and never invent transactions you weren\'t asked to add.\n\n' +
       `Today is ${todayISO()}. The user is currently on the "${page}" page.\n` +
-      `Valid categories: ${CATEGORIES.join(', ')}.\n\n` +
+      `Valid categories: ${allCategories(state).join(', ')} (or any new custom category).\n\n` +
       'SNAPSHOT:\n' +
       `Income ${fmt(totals.income)} · Spending ${fmt(totals.expense)} · Net ${fmt(totals.net)}\n` +
       'Budgets: ' +
-      (Object.entries(state.budgets).map(([c, v]) => `${c} ${fmt(v)}`).join(', ') || '(none)') +
+      (categoryBudgets(state).map(({ category, effective, items }) => `${category} ${fmt(effective)}${items.length ? ` [${items.map((i) => `${i.id}:${i.name}=${fmt(i.amount)}`).join(', ')}]` : ''}`).join(', ') || '(none)') +
       '\n\nRecent transactions (id | date | type | category | amount | desc):\n' +
       (tx || '(none)')
     )

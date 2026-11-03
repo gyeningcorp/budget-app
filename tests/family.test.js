@@ -7,6 +7,34 @@ import { randomUUID } from 'node:crypto'
 import { createApp } from '../server/app.js'
 import { applyOps, differences, emptyShared } from '../shared/sync.js'
 import { holidays, eventsForYear } from '../src/family.js'
+import { addStaplesToList } from '../shared/groceries.js'
+import { allCategories, categoryBudgets } from '../shared/budgets.js'
+test('budget line items and custom categories sum per category and sync cleanly', () => {
+  const original=emptyShared()
+  const items=[{id:'bi1',category:'Utilities',name:'Columbia Gas',amount:90,actual:85.42,notes:'Autopay'},{id:'bi2',category:'Utilities',name:'American Water',amount:60,actual:54.58},{id:'bi3',category:'Subscriptions',name:'Netflix',amount:18,actual:18}]
+  const saved=applyOps(original,differences(original,{...original,budgets:{Food:600,Utilities:300},budgetItems:items}),true)
+  assert.equal(saved.budgetItems.length,3)
+  assert.throws(()=>applyOps(original,[{field:'budgetItems',id:'bad',before:null,value:{id:'bad',category:'Food',name:'',amount:10}}]),/Invalid budgetItems/)
+  const summary=categoryBudgets(saved,{Food:200})
+  assert.equal(summary.find(x=>x.category==='Food').effective,600)
+  assert.equal(summary.find(x=>x.category==='Food').actual,200)
+  assert.equal(summary.find(x=>x.category==='Utilities').effective,150,'line items override static category limit')
+  assert.equal(summary.find(x=>x.category==='Utilities').actual,140,'typed line-item actuals sum per category')
+  assert.equal(summary.find(x=>x.category==='Subscriptions').effective,18,'custom category created from line items')
+  assert(allCategories(saved).includes('Subscriptions'))
+})
+test('always-list groceries sync as household records and load without duplicates', () => {
+  const original=emptyShared(), staples=[{id:'s1',name:'Milk',quantity:'1 gallon'},{id:'s2',name:'Eggs',quantity:''},{id:'s3',name:'Bread',quantity:''}]
+  const saved=applyOps(original,differences(original,{...original,groceryStaples:staples}),true);assert.equal(saved.groceryStaples.length,3)
+  assert.throws(()=>applyOps(original,[{field:'groceryStaples',id:'bad',before:null,value:{id:'bad',name:'  '}}]),/Invalid groceryStaples/)
+  let n=0;const list=[{id:'g1',name:'milk',quantity:'',checked:false},{id:'g2',name:'Eggs',quantity:'6',checked:true},{id:'g3',name:'Apples',quantity:'',checked:false}]
+  const result=addStaplesToList(list,staples,()=>'new-'+(++n))
+  assert.equal(result.added,2);assert.equal(result.skipped,1)
+  assert.equal(result.groceries.length,4,'unchecked milk is kept, checked eggs are reused, bread is added')
+  assert.equal(result.groceries.find(g=>g.id==='g2').checked,false)
+  assert.equal(result.groceries.find(g=>g.name==='Bread').id,'new-1')
+  assert.equal(addStaplesToList(result.groceries,staples).added,0,'loading twice adds nothing')
+})
 const origin = 'http://127.0.0.1:3000'
 const secret = 'test-only-family-auth-secret-at-least-32-chars'
 test('date rules and independent edits preserve each other, conflicting edits are rejected', () => {

@@ -1,4 +1,4 @@
-export const ARRAY_FIELDS = ['transactions', 'familyEvents', 'familyProjects', 'dateNights', 'groceries', 'meals', 'bills', 'billAccounts']
+export const ARRAY_FIELDS = ['transactions', 'familyEvents', 'familyProjects', 'dateNights', 'groceries', 'groceryStaples', 'meals', 'bills', 'billAccounts', 'budgetItems']
 export const MAP_FIELDS = ['budgets', 'paycheckPlan']
 export const SHARED_FIELDS = [...ARRAY_FIELDS, ...MAP_FIELDS]
 const unsafe = key => ['__proto__', 'constructor', 'prototype'].includes(key)
@@ -52,9 +52,11 @@ export function validateRecord(field, value) {
   if (field === 'familyProjects') valid = text('title') && Array.isArray(value.tasks) && value.tasks.length <= 500 && value.tasks.every(t => t && typeof t.id === 'string' && typeof t.text === 'string' && typeof t.done === 'boolean')
   if (field === 'dateNights') valid = text('title') && day('date') && amount('budget') && amount('spent') && text('notes') && ['Idea', 'Planned', 'Done', 'Cancelled'].includes(value.status)
   if (field === 'groceries') valid = text('name') && typeof value.checked === 'boolean'
+  if (field === 'groceryStaples') valid = text('name') && value.name.trim() !== '' && (value.quantity === undefined || text('quantity'))
   if (field === 'meals') valid = text('title') && day('date') && text('slot') && text('ingredients')
   if (field === 'billAccounts') valid = text('providerId') && text('nickname') && (value.accountLast4 === '' || /^[a-zA-Z0-9]{4}$/.test(value.accountLast4)) && text('notes')
   if (field === 'bills') valid = text('title') && day('due') && amount('amount') && typeof value.paid === 'boolean'
   if (field === 'budgets') valid = typeof value === 'number' && Number.isFinite(value) && value >= 0
+  if (field === 'budgetItems') valid = text('category') && value.category.trim() !== '' && text('name') && value.name.trim() !== '' && typeof value.amount === 'number' && Number.isFinite(value.amount) && value.amount >= 0 && (value.actual === undefined || (typeof value.actual === 'number' && Number.isFinite(value.actual) && value.actual >= 0)) && (value.notes === undefined || text('notes'))
   if (!valid) throw new Error(`Invalid ${field} record. Check the imported data.`)
 }
