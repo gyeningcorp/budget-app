@@ -260,3 +260,78 @@ td.rowtools button:hover { color: var(--red); background: rgba(255, 93, 108, 0.1
 .ai-input input { flex: 1; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; color: var(--text); font-size: 14px; }
 .ai-input input:focus { outline: 2px solid var(--green); outline-offset: -1px; }
 table.sheet tfoot td { padding: 11px 8px; font-weight: 700; border-top: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+
+/* Paycheck Waterfall Breakdown */
+.paycheck-waterfall {
+  margin-top: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: rgba(7, 15, 12, 0.72);
+  overflow: hidden;
+}
+.waterfall-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 16px;
+  border-bottom: 1px solid rgba(38, 224, 140, 0.12);
+}
+.waterfall-row:last-child { border-bottom: 0; }
+.waterfall-row strong { display: block; font-size: 14px; color: var(--text); }
+.waterfall-total {
+  background: linear-gradient(90deg, rgba(34, 229, 139, 0.12), rgba(37, 208, 246, 0.06));
+  border-top: 1px solid var(--border-strong);
+}
+.waterfall-amt {
+  font-size: 19px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.waterfall-amt.pos { color: var(--green); }
+.waterfall-amt.neg { color: var(--red); }
+
+/* Mobile & Standalone PWA Enhancements */
+.install-app-btn { white-space: nowrap; font-size: 12.5px; padding: 8px 12px; }
+.install-banner { margin-bottom: 16px; border-color: var(--border-strong); }
+
+@media (max-width: 680px) {
+  .app {
+    padding-top: max(16px, env(safe-area-inset-top));
+    padding-bottom: calc(92px + env(safe-area-inset-bottom));
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+  }
+  .topbar { gap: 10px; margin-bottom: 14px; }
+  .brand h1 { font-size: 16.5px; }
+  .tabs {
+    position: sticky;
+    top: max(6px, env(safe-area-inset-top));
+    z-index: 30;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding: 5px;
+    background: rgba(8, 17, 13, 0.94);
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tabs button { padding: 9px 13px; font-size: 13px; }
+  /* Prevent iOS Safari zoom on input focus */
+  input, select, textarea, .family-field input, .family-field select, .family-field textarea {
+    font-size: 16px !important;
+  }
+  .family-toolbar .family-field { flex: 1 1 100%; width: 100%; }
+  .family-toolbar .btn { width: 100%; min-height: 44px; font-size: 14px; }
+  .waterfall-row { flex-direction: column; align-items: flex-start; gap: 6px; }
+  .waterfall-amt { align-self: flex-end; }
+  .ai-dock {
+    right: max(14px, env(safe-area-inset-right));
+    bottom: calc(16px + env(safe-area-inset-bottom));
+  }
+  .ai-panel {
+    width: calc(100vw - 24px);
+    height: min(500px, calc(100dvh - 110px));
+  }
+}

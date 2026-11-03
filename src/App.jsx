@@ -291,8 +291,47 @@ function loadState() {
 
 export default function App() {
   const [tab, setTab] = useState(() => location.hash.includes('invite=') ? 'Family' : 'Dashboard')
+  const [installPrompt, setInstallPrompt] = useState(null)
+  const [showInstallGuide, setShowInstallGuide] = useState(false)
+  const [isStandalone, setIsStandalone] = useState(() =>
+    typeof window !== 'undefined' &&
+    (Boolean(window.matchMedia?.('(display-mode: standalone)')?.matches) || window.navigator?.standalone === true)
+  )
   const sync = useHousehold(loadState, LS_KEY)
   const { state, setState } = sync
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onPrompt = (e) => {
+      e.preventDefault()
+      setInstallPrompt(e)
+    }
+    const onInstalled = () => {
+      setInstallPrompt(null)
+      setIsStandalone(true)
+      setShowInstallGuide(false)
+    }
+    window.addEventListener('beforeinstallprompt', onPrompt)
+    window.addEventListener('appinstalled', onInstalled)
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onPrompt)
+      window.removeEventListener('appinstalled', onInstalled)
+    }
+  }, [])
+
+  const handleInstallClick = async () => {
+    if (installPrompt && typeof installPrompt.prompt === 'function') {
+      try {
+        await installPrompt.prompt()
+        const choice = await installPrompt.userChoice
+        if (choice?.outcome === 'accepted') setInstallPrompt(null)
+        return
+      } catch {
+        // Fall through to manual guide
+      }
+    }
+    setShowInstallGuide((v) => !v)
+  }
 
   const update = (patch) => setState((s) => ({ ...s, ...patch }))
 
@@ -341,7 +380,29 @@ export default function App() {
             <span>{sync.status}</span>
           </div>
         </div>
+        {!isStandalone && (
+          <button type="button" className="btn ghost install-app-btn" onClick={handleInstallClick}>
+            {installPrompt ? '📲 Install App' : '📲 Save to Phone'}
+          </button>
+        )}
       </header>
+
+      {showInstallGuide && (
+        <div className="card install-banner" role="region" aria-label="Install app instructions">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <h3 style={{ margin: 0, color: 'var(--text)' }}>📲 Save Family Hub as an App on Your Phone</h3>
+            <button type="button" className="btn ghost" style={{ padding: '4px 10px' }} onClick={() => setShowInstallGuide(false)}>Close</button>
+          </div>
+          <div className="grid cols-2" style={{ marginTop: 10 }}>
+            <div className="callout">
+              <b>iPhone / iPad (Safari):</b> Tap the <b>Share</b> button <span aria-hidden="true">(⬆)</span> at the bottom of Safari, scroll down and tap <b>Add to Home Screen</b>, then tap <b>Add</b>.
+            </div>
+            <div className="callout">
+              <b>Android (Chrome):</b> Tap the <b>⋮ menu</b> in the top-right corner of Chrome and tap <b>Add to Home screen</b> or <b>Install app</b>.
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="family-connection"><span>{sync.account?.household ? sync.account.household.name : "Your family, in one place"}</span><button className="btn ghost" onClick={() => setTab('Family')}>{sync.account ? 'Family settings' : 'Family sign in'}</button></div>
       {sync.conflict && <p role="alert" className="family-error">A simultaneous edit needs your review. <button className="btn ghost" onClick={() => setTab('Family')}>Review changes</button></p>}
@@ -363,7 +424,7 @@ export default function App() {
       {tab === 'Budgets' && <Budgets state={state} update={update} byCat={totals.byCat} totals={totals} onNavigate={setTab} />}
       {tab === 'Advisor' && <Advisor state={state} totals={totals} />}
       {tab === 'Opportunities' && <Opportunities state={state} totals={totals} update={update} />}
-      {tab === 'Settings' && <Settings state={state} update={update} setState={setState} openFamily={() => setTab('Family')} />}
+      {tab === 'Settings' && <Settings state={state} update={update} setState={setState} openFamily={() => setTab('Family')} onInstall={handleInstallClick} isStandalone={isStandalone} hasPrompt={!!installPrompt} />}
 
       <p className="foot">House of Gyening · Family Hub · Your household, together.</p>
 
@@ -1267,7 +1328,7 @@ function Opportunities({ state, totals, update }) {
   )
 }
 
-function Settings({ state, update, setState, openFamily }) {
+function Settings({ state, update, setState, openFamily, onInstall, isStandalone, hasPrompt }) {
   const [key, setKey] = useState(state.apiKey || '')
   const [saved, setSaved] = useState(false)
   const [bank, setBank] = useState(state.bank || { url: '', secret: '' })
@@ -1305,6 +1366,34 @@ function Settings({ state, update, setState, openFamily }) {
   return (
     <>
       <div className="card" style={{ marginTop: 18 }}>
+        <h3>📲 Save as App on Your Phone</h3>
+        {isStandalone ? (
+          <div className="callout">
+            <b>Installed ✓</b> — You are running Family Hub as a standalone home-screen app.
+          </div>
+        ) : (
+          <>
+            <p className="muted" style={{ marginBottom: 10 }}>
+              Install House of Gyening · Family Hub on your iPhone or Android home screen for full-screen, one-tap access.
+            </p>
+            <div className="row" style={{ marginBottom: 10 }}>
+              <button type="button" className="btn" onClick={onInstall}>
+                {hasPrompt ? '📲 Install App Now' : '📲 Show Phone Install Steps'}
+              </button>
+            </div>
+            <div className="grid cols-2">
+              <div className="callout">
+                <b>iPhone / iPad (Safari):</b> Tap <b>Share (⬆)</b> → <b>Add to Home Screen</b> → <b>Add</b>.
+              </div>
+              <div className="callout">
+                <b>Android (Chrome):</b> Tap <b>⋮ Menu</b> → <b>Install app</b> (or <b>Add to Home screen</b>).
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="card" style={{ marginTop: 14 }}>
         <h3>{state._cloud ? 'Shared Claude API key' : 'Anthropic API key'}</h3>
         {state._cloud ? <><p>Configure one key for everyone in your household under Family settings.</p><button className="btn" onClick={openFamily}>Open family AI settings</button></> : <>
         <div className="callout" style={{ marginBottom: 12 }}>
