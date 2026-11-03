@@ -7,7 +7,7 @@ import HomePlanning from './HomePlanning'
 import BillAccounts from './BillAccounts'
 import { claudeRequest } from './claude'
 import { sharedState } from '../shared/sync'
-import { allCategories, canonicalCategory, categoryBudgets } from '../shared/budgets'
+import { PAYCHECK_FREQUENCIES, allCategories, canonicalCategory, categoryBudgets, paycheckSummary } from '../shared/budgets'
 import { dateKey } from './family.js'
 
 const LS_KEY = 'hog-budget-v1'
@@ -34,6 +34,7 @@ const SEED = {
   meals: [],
   bills: [],
   billAccounts: [],
+  paychecks: [],
   paycheckPlan: {},
   apiKey: '',
   bank: { url: '', secret: '' },
@@ -296,18 +297,39 @@ export default function App() {
   const update = (patch) => setState((s) => ({ ...s, ...patch }))
 
   const totals = useMemo(() => {
-    let income = 0,
-      expense = 0
+    let loggedIncome = 0,
+      txExpense = 0
     const byCat = {}
     for (const t of state.transactions) {
-      if (t.type === 'income') income += t.amount
+      if (t.type === 'income') loggedIncome += t.amount
       else {
-        expense += t.amount
+        txExpense += t.amount
         byCat[t.category] = (byCat[t.category] || 0) + t.amount
       }
     }
-    return { income, expense, net: income - expense, byCat }
-  }, [state.transactions])
+    const pay = paycheckSummary(state)
+    const budgetSummary = categoryBudgets(state, byCat)
+    const totalPlanned = budgetSummary.reduce((s, b) => s + b.effective, 0)
+    const totalActualSpent = budgetSummary.reduce((s, b) => s + b.actual, 0)
+    // Primary household income flows from Paychecks when paychecks are defined (or whichever is higher with logged income).
+    const income = pay.count > 0 ? Math.max(pay.monthly, loggedIncome) : loggedIncome
+    const expense = Math.max(txExpense, totalActualSpent)
+    const unbudgetedIncome = income - totalPlanned
+    return {
+      income,
+      loggedIncome,
+      paycheckMonthly: pay.monthly,
+      paycheckPerCycle: pay.perCycle,
+      paycheckCount: pay.count,
+      nextPayday: pay.nextDate,
+      expense,
+      txExpense,
+      net: income - expense,
+      totalPlanned,
+      unbudgetedIncome,
+      byCat,
+    }
+  }, [state.transactions, state.paychecks, state.budgets, state.budgetItems])
 
   return (
     <div className="app">
@@ -338,7 +360,7 @@ export default function App() {
       {['Groceries', 'Meals', 'Paychecks'].includes(tab) && <HomePlanning tab={tab} state={state} setState={setState} />}
       {tab === 'Dashboard' && <Dashboard state={state} totals={totals} transactions={state.transactions} onNavigate={setTab} />}
       {tab === 'Transactions' && <Transactions state={state} setState={setState} />}
-      {tab === 'Budgets' && <Budgets state={state} update={update} byCat={totals.byCat} />}
+      {tab === 'Budgets' && <Budgets state={state} update={update} byCat={totals.byCat} totals={totals} onNavigate={setTab} />}
       {tab === 'Advisor' && <Advisor state={state} totals={totals} />}
       {tab === 'Opportunities' && <Opportunities state={state} totals={totals} update={update} />}
       {tab === 'Settings' && <Settings state={state} update={update} setState={setState} openFamily={() => setTab('Family')} />}
@@ -391,9 +413,13 @@ function Dashboard({ state, totals, transactions, onNavigate }) {
 
       <div className="grid cols-4">
         <div className="card">
-          <h3>Income</h3>
+          <h3>Household Income</h3>
           <div className="stat pos">{fmt(totals.income)}</div>
-          <div className="muted">{transactions.filter((t) => t.type === 'income').length} inflow entries</div>
+          <div className="muted">
+            {totals.paycheckCount > 0
+              ? `${totals.paycheckCount} paycheck${totals.paycheckCount === 1 ? '' : 's'} (${fmt(totals.paycheckPerCycle)}/cycle)`
+              : `${transactions.filter((t) => t.type === 'income').length} inflow entries`}
+          </div>
         </div>
         <div className="card">
           <h3>Spending</h3>
@@ -403,20 +429,32 @@ function Dashboard({ state, totals, transactions, onNavigate }) {
         <div className="card">
           <h3>Net Cashflow</h3>
           <div className={'stat ' + (totals.net >= 0 ? 'pos' : 'neg')}>{fmt(totals.net)}</div>
-          <div className="muted">{totals.net >= 0 ? `${savingsRate}% retained` : 'deficit alert'}</div>
+          <div className="muted">{totals.net >= 0 ? `${savingsRate}% of income retained` : 'deficit alert'}</div>
         </div>
         <div className="card">
-          <h3>Planned Budget</h3>
-          <div className="stat">{fmt(totalBudgeted)}</div>
-          <div className="muted">{fmt(Math.max(0, totalBudgeted - totalBudgetSpent))} remaining across {budgetSummary.length} categories</div>
+          <h3>Unbudgeted Income</h3>
+          <div className={'stat ' + (totals.unbudgetedIncome >= 0 ? 'pos' : 'neg')}>{fmt(totals.unbudgetedIncome)}</div>
+          <div className="muted">{fmt(totalBudgeted)} planned across {budgetSummary.length} categories</div>
         </div>
       </div>
 
       <div className="grid cols-4 hud-ops">
         <button type="button" className="hud-tile" onClick={() => onNavigate('Paychecks')}>
-          <span className="hud-tile-kicker">BILLS & PAYCHECKS</span>
-          <strong>{unpaidBills.length ? `${unpaidBills.length} due · ${fmt(unpaidTotal)}` : 'All bills clear'}</strong>
-          <small>{unpaidBills[0] ? `Next: ${unpaidBills[0].title} (${unpaidBills[0].due})` : 'No pending due dates'}</small>
+          <span className="hud-tile-kicker">PAYCHECKS & BILLS</span>
+          <strong>
+            {totals.paycheckCount > 0
+              ? `${fmt(totals.paycheckPerCycle)}/check · ${unpaidBills.length} bills`
+              : unpaidBills.length
+              ? `${unpaidBills.length} due · ${fmt(unpaidTotal)}`
+              : 'Set up paychecks'}
+          </strong>
+          <small>
+            {unpaidBills[0]
+              ? `Next bill: ${unpaidBills[0].title} (${unpaidBills[0].due})`
+              : totals.nextPayday
+              ? `Next payday: ${totals.nextPayday}`
+              : 'Tap to enter what each paycheck is'}
+          </small>
         </button>
         <button type="button" className="hud-tile" onClick={() => onNavigate('Groceries')}>
           <span className="hud-tile-kicker">SUPPLY & GROCERIES</span>
@@ -670,7 +708,7 @@ function Transactions({ state, setState }) {
   )
 }
 
-function Budgets({ state, update, byCat }) {
+function Budgets({ state, update, byCat, totals, onNavigate }) {
   const [cat, setCat] = useState('Food')
   const [customCat, setCustomCat] = useState('')
   const [amt, setAmt] = useState('')
@@ -687,6 +725,9 @@ function Budgets({ state, update, byCat }) {
   const totalPlanned = entries.reduce((s, e) => s + e.effective, 0)
   const totalActual = entries.reduce((s, e) => s + e.actual, 0)
   const totalVariance = totalPlanned - totalActual
+  const monthlyIncome = totals?.income || 0
+  const unbudgeted = monthlyIncome - totalPlanned
+  const leftAfterActual = monthlyIncome - totalActual
 
   const setBudget = (e) => {
     e.preventDefault()
@@ -733,21 +774,34 @@ function Budgets({ state, update, byCat }) {
 
   return (
     <>
-      <div className="grid cols-3" style={{ marginTop: 18 }}>
+      <div className="grid cols-4" style={{ marginTop: 18 }}>
+        <div className="card">
+          <h3>Paycheck Income / Mo</h3>
+          <div className="stat pos">{fmt(monthlyIncome)}</div>
+          <div className="muted">
+            {totals?.paycheckCount > 0 ? (
+              <>{totals.paycheckCount} paycheck{totals.paycheckCount === 1 ? '' : 's'} ({fmt(totals.paycheckPerCycle)}/cycle)</>
+            ) : (
+              <button type="button" className="btn ghost" style={{ padding: '3px 8px', fontSize: 11 }} onClick={() => onNavigate && onNavigate('Paychecks')}>
+                + Set paychecks →
+              </button>
+            )}
+          </div>
+        </div>
         <div className="card">
           <h3>Total Planned</h3>
           <div className="stat">{fmt(totalPlanned)}</div>
-          <div className="muted">{entries.length} budgeted categories · {items.length} line items</div>
+          <div className="muted">{entries.length} categories · {items.length} line items</div>
         </div>
         <div className="card">
-          <h3>Total Actual</h3>
-          <div className="stat neg">{fmt(totalActual)}</div>
-          <div className="muted">combined line-item & ledger actuals</div>
+          <h3>Unbudgeted Income</h3>
+          <div className={'stat ' + (unbudgeted >= 0 ? 'pos' : 'neg')}>{fmt(unbudgeted)}</div>
+          <div className="muted">{unbudgeted >= 0 ? 'income left to assign' : 'planned exceeds income'}</div>
         </div>
         <div className="card">
-          <h3>Variance</h3>
-          <div className={'stat ' + (totalVariance >= 0 ? 'pos' : 'neg')}>{fmt(totalVariance)}</div>
-          <div className="muted">{totalVariance >= 0 ? 'under planned budget' : 'over planned budget'}</div>
+          <h3>Income Left After Actuals</h3>
+          <div className={'stat ' + (leftAfterActual >= 0 ? 'pos' : 'neg')}>{fmt(leftAfterActual)}</div>
+          <div className="muted">{fmt(totalActual)} spent · {fmt(totalVariance)} vs plan</div>
         </div>
       </div>
 
@@ -995,8 +1049,10 @@ function Advisor({ state, totals }) {
   const hasKey = !!(state._sharedAI || state.apiKey)
 
   const buildContext = () => {
+    const paychecks = (state.paychecks || []).map((p) => `${p.name}${p.owner ? ` (${p.owner})` : ''}: ${fmt(p.amount)} ${p.frequency || 'Bi-weekly'}${p.date ? ` next ${p.date}` : ''}`).join('; ')
     const lines = [
-      `Income total: ${fmt(totals.income)}`,
+      `Monthly household income (from paychecks/ledger): ${fmt(totals.income)} (unbudgeted: ${fmt(totals.unbudgetedIncome)})`,
+      `Paychecks: ${paychecks || '(none configured yet)'}`,
       `Expense total: ${fmt(totals.expense)}`,
       `Net: ${fmt(totals.net)}`,
       'Spending by category: ' +
@@ -1381,6 +1437,27 @@ const AI_TOOLS = [
     input_schema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
   },
   {
+    name: 'add_paycheck',
+    description: 'Add or define a household paycheck stream (what the paycheck is, earner, net amount, frequency, next payday) so the rest of the app flows off of that income.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Paycheck label, e.g. "Chris paycheck" or "Sarah paycheck"' },
+        owner: { type: 'string', description: 'Household member / earner name' },
+        amount: { type: 'number', description: 'Net take-home dollar amount per paycheck, >= 0' },
+        frequency: { type: 'string', enum: PAYCHECK_FREQUENCIES },
+        date: { type: 'string', description: 'Next payday YYYY-MM-DD' },
+        notes: { type: 'string' },
+      },
+      required: ['name', 'amount'],
+    },
+  },
+  {
+    name: 'remove_paycheck',
+    description: 'Remove a saved paycheck by its id.',
+    input_schema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+  },
+  {
     name: 'remove_budget',
     description: 'Remove the budget for a category.',
     input_schema: { type: 'object', properties: { category: { type: 'string' } }, required: ['category'] },
@@ -1460,6 +1537,24 @@ function runAiTool(name, input, setState, stateRef, setTab) {
       setState((s) => ({ ...s, budgetItems: (s.budgetItems || []).filter((x) => x.id !== input.id) }))
       return `Removed budget line item "${cur.name}" from ${cur.category}.`
     }
+    case 'add_paycheck': {
+      const name = String(input.name || '').trim()
+      const amount = Number(input.amount)
+      const frequency = PAYCHECK_FREQUENCIES.includes(input.frequency) ? input.frequency : 'Bi-weekly'
+      const date = input.date ? cleanDate(input.date) : todayISO()
+      const owner = input.owner ? String(input.owner).trim() : ''
+      const notes = input.notes ? String(input.notes).trim() : ''
+      if (!name || !(amount >= 0)) return `Invalid paycheck.`
+      const item = { id: crypto.randomUUID(), name, amount, frequency, date, owner, notes }
+      setState((s) => ({ ...s, paychecks: [...(s.paychecks || []), item] }))
+      return `Added paycheck "${name}" (${fmt(amount)} ${frequency}) (id ${item.id}).`
+    }
+    case 'remove_paycheck': {
+      const cur = (stateRef.current.paychecks || []).find((x) => x.id === input.id)
+      if (!cur) return `No paycheck with id ${input.id}.`
+      setState((s) => ({ ...s, paychecks: (s.paychecks || []).filter((x) => x.id !== input.id) }))
+      return `Removed paycheck "${cur.name}".`
+    }
     case 'remove_budget': {
       const c = canonicalCategory(stateRef.current, input.category)
       const hasLimit = stateRef.current.budgets[c] != null
@@ -1520,8 +1615,10 @@ function Assistant({ state, setState, totals, page, setTab }) {
       `Today is ${todayISO()}. The user is currently on the "${page}" page.\n` +
       `Valid categories: ${allCategories(state).join(', ')} (or any new custom category).\n\n` +
       'SNAPSHOT:\n' +
-      `Income ${fmt(totals.income)} · Spending ${fmt(totals.expense)} · Net ${fmt(totals.net)}\n` +
-      'Budgets: ' +
+      `Income ${fmt(totals.income)} (Paychecks per cycle ${fmt(totals.paycheckPerCycle)} · Unbudgeted ${fmt(totals.unbudgetedIncome)}) · Spending ${fmt(totals.expense)} · Net ${fmt(totals.net)}\n` +
+      'Paychecks: ' +
+      ((state.paychecks || []).map((p) => `${p.id}:${p.name}=${fmt(p.amount)} (${p.frequency || 'Bi-weekly'}, next ${p.date || 'unset'})`).join(', ') || '(none)') +
+      '\nBudgets: ' +
       (categoryBudgets(state).map(({ category, effective, items }) => `${category} ${fmt(effective)}${items.length ? ` [${items.map((i) => `${i.id}:${i.name}=${fmt(i.amount)}`).join(', ')}]` : ''}`).join(', ') || '(none)') +
       '\n\nRecent transactions (id | date | type | category | amount | desc):\n' +
       (tx || '(none)')

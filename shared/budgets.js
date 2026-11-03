@@ -1,5 +1,15 @@
 export const DEFAULT_CATEGORIES = ['Income', 'Housing', 'Food', 'Transport', 'Utilities', 'Health', 'Fun', 'Savings', 'Other']
+export const PAYCHECK_FREQUENCIES = ['Bi-weekly', 'Weekly', 'Semi-monthly', 'Monthly', 'One-time']
+const FREQ_MULTIPLIER = { Weekly: 52 / 12, 'Bi-weekly': 26 / 12, 'Semi-monthly': 2, Monthly: 1, 'One-time': 1 }
 const sameKey = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase()
+
+export function paycheckSummary(state) {
+  const paychecks = state?.paychecks || []
+  const perCycle = paychecks.reduce((s, p) => s + (Number(p.amount) || 0), 0)
+  const monthly = paychecks.reduce((s, p) => s + (Number(p.amount) || 0) * (FREQ_MULTIPLIER[p.frequency] || 1), 0)
+  const nextDate = [...paychecks].filter((p) => p.date).sort((a, b) => a.date.localeCompare(b.date))[0]?.date || ''
+  return { count: paychecks.length, perCycle, monthly, nextDate }
+}
 
 export function allCategories(state) {
   const seen = [...DEFAULT_CATEGORIES]
