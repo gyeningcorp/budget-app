@@ -1241,7 +1241,16 @@ function Advisor({ state, setState, totals, setTab }) {
         break
       }
     } catch (e) {
-      setError(e.message || String(e))
+      const fallbackReply = runLocalAssistantFallback(text, mutateState, stateRef, setTab)
+      setMessages((m) => [
+        ...m,
+        {
+          role: 'assistant',
+          content:
+            fallbackReply +
+            `\n\n(Note: Switched to built-in Smart Controller because the saved key returned an API error — to use your Claude Pro/Max subscription directly, run \`claude setup-token\` and paste your \`sk-ant-oat01-…\` subscription token in Family settings, or click "💬 Talk in Claude.ai Subscription ↗" above.)`,
+        },
+      ])
     } finally {
       setBusy(false)
     }
@@ -2674,8 +2683,22 @@ function parseSpokenDate(text) {
 }
 
 function runLocalAssistantFallback(text, applyState, stateRef, setTab) {
-  const lower = text.toLowerCase()
+  const lower = text.toLowerCase().trim()
   const dueDate = parseSpokenDate(text)
+
+  // 0. Friendly greeting / help
+  if (/^(hi|hello|hey|yo|sup|good\s*(morning|afternoon|evening)|howdy|help|what\s*can\s*you\s*do)\b[!.?]*$/i.test(lower)) {
+    const snap = realtimeFinancialSnapshot(stateRef.current)
+    return (
+      `👋 Hey there! I'm Rory, your real-time AI Financial Controller for House of Gyening.\n\n` +
+      `📊 ${formatLiveRemaining(stateRef.current)}\n\n` +
+      `Here is what I can adjust across the entire app right now:\n` +
+      `• Bills & What's Left: "I have a $140 electric bill due on 2026-11-18, adjust the app to reflect what's left"\n` +
+      `• Debt Payoff Strategy: "Add debt Chase Visa $4,200 at 22.9% APR min $110 and give me best steps to pay it off"\n` +
+      `• Paychecks & Income: "Set my bi-weekly paycheck to $2,600 on 2026-11-15"` +
+      (snap.debtCount > 0 ? `\n\n💡 You currently have ${snap.debtCount} tracked debt(s) totaling ${fmt(snap.totalDebtBalance)} — ask me "How do I pay off my debt?" anytime!` : '')
+    )
+  }
 
   // 1. Debt addition or Debt Payoff Strategy request
   if (/\bdebt|pay\s*off|avalanche|snowball|apr|credit\s*card|loan\b/i.test(text)) {
@@ -2714,7 +2737,10 @@ function runLocalAssistantFallback(text, applyState, stateRef, setTab) {
 
   // 2. Bill due on a specific day / "adjust the app to reflect real time what's left"
   if (/\bbill\b|\bdue\b|\belectric\b|\bwater\b|\bgas\b|\binternet\b|\brent\b|\bmortgage\b|\binsurance\b|\bt-mobile\b|\bcolumbia\b|\bpalmetto\b/i.test(text)) {
-    const amtMatch = text.match(/\$\s*(\d+(?:,\d{3})*(?:\.\d+)?)/) || text.match(/\b(\d+(?:\.\d+)?)\s*dollars?\b/i)
+    const amtMatch =
+      text.match(/\$\s*(\d+(?:,\d{3})*(?:\.\d+)?)/) ||
+      text.match(/\b(\d+(?:\.\d+)?)\s*dollars?\b/i) ||
+      text.match(/\bfor\s+(\d+(?:,\d{3})*(?:\.\d+)?)\b/i)
     if (amtMatch) {
       const amount = parseFloat(amtMatch[1].replace(/,/g, ''))
       let title = 'Utility Bill'
@@ -2867,7 +2893,21 @@ function Assistant({ state, setState, totals, page, setTab, queuedPrompt, onCons
         break
       }
     } catch (e) {
-      setError(e.message || String(e))
+      const fallbackReply = runLocalAssistantFallback(text, applyState, stateRef, setTab)
+      setConvo((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'text',
+              text:
+                fallbackReply +
+                `\n\n(Note: Answered with built-in Rory Smart Controller because the saved key returned an API error — to use your Claude Pro/Max subscription directly, paste your \`sk-ant-oat01-…\` subscription token from \`claude setup-token\` in Family settings, or click "💬 Claude.ai ↗" at the top of this window.)`,
+            },
+          ],
+        },
+      ])
     } finally {
       setBusy(false)
     }

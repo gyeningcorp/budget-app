@@ -17,8 +17,18 @@ export function claudeRequest(state, body) {
   const token = String(state?.apiKey || '').trim().replace(/^Bearer\s+/i, '').trim()
   const isSubscriptionOAuth = token.startsWith('sk-ant-oat')
   const authHeaders = isSubscriptionOAuth
-    ? { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20' }
+    ? { Authorization: `Bearer ${token}`, 'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20' }
     : { 'x-api-key': token }
+  const finalBody =
+    isSubscriptionOAuth && payload.system && typeof payload.system === 'string'
+      ? {
+          ...payload,
+          system: [
+            { type: 'text', text: "You are Claude Code, Anthropic's official CLI for Claude." },
+            { type: 'text', text: payload.system },
+          ],
+        }
+      : payload
 
   return fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -28,7 +38,7 @@ export function claudeRequest(state, body) {
       'anthropic-version': '2023-06-01',
       'anthropic-dangerous-direct-browser-access': 'true',
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(finalBody),
   })
 }
 

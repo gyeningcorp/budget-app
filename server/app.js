@@ -92,7 +92,7 @@ export async function createApp({ databasePath, baseURL, secret, production = fa
     else { if (!raw.startsWith('sk-ant-') || raw.length<20 || raw.length>500 || /\s/.test(raw)) return res.status(400).json({error:'Enter a valid Claude subscription token (sk-ant-oat01-…) or Anthropic key (sk-ant-…).'}); db.prepare('INSERT INTO ai_settings VALUES(?,?) ON CONFLICT(household_id) DO UPDATE SET encrypted_key=excluded.encrypted_key').run(hid,encryptKey(raw,hid)) }
     res.json({configured:!!raw, subscription: raw.startsWith('sk-ant-oat')})
   })
-  const ALLOWED_MODELS = new Set(['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5'])
+  const ALLOWED_MODELS = new Set(['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5', 'claude-sonnet-4-20250514', 'claude-3-7-sonnet-20250219', 'claude-3-5-sonnet-20241022'])
   async function callClaude(hid, payload) {
     const setting=db.prepare('SELECT encrypted_key FROM ai_settings WHERE household_id=?').get(hid)
     if (!setting) throw Object.assign(new Error('Ask the household owner to connect your Claude subscription token or key in Family settings.'),{status:400})
@@ -102,11 +102,29 @@ export async function createApp({ databasePath, baseURL, secret, production = fa
     const token=decryptKey(setting.encrypted_key,hid)
     const isSub=token.startsWith('sk-ant-oat')
     const authHeaders=isSub
-      ? {'authorization':`Bearer ${token}`,'anthropic-beta':'oauth-2025-04-20'}
+      ? {'authorization':`Bearer ${token}`,'anthropic-beta':'claude-code-20250219,oauth-2025-04-20','user-agent':'claude-cli/1.0.0 (external, cli)'}
       : {'x-api-key':token}
     const chosenModel=ALLOWED_MODELS.has(payload.model) ? payload.model : (process.env.CLAUDE_MODEL || 'claude-sonnet-4-6')
-    const upstream=await aiFetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','anthropic-version':'2023-06-01',...authHeaders},body:JSON.stringify({...payload,model:chosenModel,max_tokens:Math.min(Math.max(Number(payload.max_tokens)||1024,1),2048)}),signal:AbortSignal.timeout(45000)})
-    if (!upstream.ok) throw Object.assign(new Error(`Claude could not complete the request (HTTP ${upstream.status}). Check your Claude subscription token or key in Family settings.`),{status:upstream.status===401?400:502})
+    const maxTokens=Math.min(Math.max(Number(payload.max_tokens)||1024,1),2048)
+    const buildBody=(m,useSubSystem)=>{
+      const sys=useSubSystem
+        ? [{type:'text',text:"You are Claude Code, Anthropic's official CLI for Claude."},...(payload.system?[{type:'text',text:String(payload.system)}]:[])]
+        : payload.system
+      return JSON.stringify({...payload, ...(sys?{system:sys}:{}), model:m, max_tokens:maxTokens})
+    }
+    let upstream=await aiFetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','anthropic-version':'2023-06-01',...authHeaders},body:buildBody(chosenModel,isSub),signal:AbortSignal.timeout(45000)})
+    if (!upstream.ok) {
+      const errData=await upstream.json().catch(()=>({}))
+      const errMsg=errData?.error?.message || ''
+      if ((upstream.status===400 || upstream.status===404) && /model/i.test(errMsg) && chosenModel!=='claude-sonnet-4-20250514') {
+        upstream=await aiFetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','anthropic-version':'2023-06-01',...authHeaders},body:buildBody('claude-sonnet-4-20250514',isSub),signal:AbortSignal.timeout(45000)})
+        if (upstream.ok) return upstream.json()
+      }
+      const hint=/credit balance/i.test(errMsg)
+        ? 'Your Anthropic Console API key has $0 API credits. To use your Claude Pro/Max subscription instead of buying API credits, run `claude setup-token` and paste your `sk-ant-oat01-…` subscription token in Family settings.'
+        : errMsg || 'Check your Claude subscription token or key in Family settings.'
+      throw Object.assign(new Error(`Claude could not complete the request (HTTP ${upstream.status}): ${hint}`),{status:upstream.status===401?400:502})
+    }
     return upstream.json()
   }
   app.post('/api/family/ai', needFamily, async (req,res) => {
