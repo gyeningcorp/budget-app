@@ -454,7 +454,7 @@ export default function App() {
         </button>
       </div>
 
-      {tab === 'Family HQ' && <FamilyHQ state={state} setState={setState} onNavigate={setTab} />}
+      {tab === 'Family HQ' && <FamilyHQ state={state} setState={setState} onNavigate={setTab} syncStatus={sync.status} pendingCount={sync.pendingCount} />}
       {['Calendar', 'Projects', 'Ideas'].includes(tab) && <Family tab={tab} state={state} setState={setState} onNavigate={setTab} />}
       {tab === 'Family' && <Account sync={sync} />}
       {tab === 'Bill accounts' && <BillAccounts sync={sync} onNavigate={setTab} />}
