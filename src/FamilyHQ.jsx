@@ -58,7 +58,7 @@ export default function FamilyHQ({state,setState,onNavigate}){
  const [owner,setOwner]=useState('Together')
  const [day,setDay]=useState('Monday')
  const update=patch=>{preserveScroll();setState(s=>{const previous=s.familyPlan?.plan || s.familyPlan || defaults();const plan={...previous,...patch};return {...s,familyPlan:{...s.familyPlan,plan},...(patch.schedules?{familyEvents:syncSchedule(s.familyEvents||[],plan.schedules)}:{})}})}
- const begin=()=>{preserveScroll();setState(s=>{const existing=s.familyPlan?.plan || s.familyPlan;const plan=existing&&Array.isArray(existing.schedules)?existing:defaults();return {...s,familyPlan:{...s.familyPlan,plan},familyEvents:syncSchedule(s.familyEvents||[],plan.schedules||[])}});setMessage('Family plan loaded and weekly activities added to Calendar. Existing bills and paychecks are unchanged; enter confirmed amounts and due dates to update your financial dashboard. No autopay was enabled.')}
+ const begin=()=>{preserveScroll();setState(s=>{const existing=s.familyPlan?.plan || (Array.isArray(s.familyPlan?.schedules)?s.familyPlan:null);const plan=existing||defaults();return {...s,familyPlan:{...s.familyPlan,plan},familyEvents:syncSchedule(s.familyEvents||[],plan.schedules||[])}});setMessage('Family plan loaded and weekly activities added to Calendar. Existing bills and paychecks are unchanged; enter confirmed amounts and due dates to update your financial dashboard. No autopay was enabled.')}
  const addCalendar=()=>{
   preserveScroll()
   setState(s=>({...s,familyEvents:syncSchedule(s.familyEvents||[],plan.schedules||[]),familyPlan:{...s.familyPlan,plan:{...plan,calendarAdded:true}}}))
