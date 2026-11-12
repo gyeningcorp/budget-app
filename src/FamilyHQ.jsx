@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { dateKey } from './family.js'
 const uid=()=>crypto.randomUUID()
 const chores=[
@@ -37,6 +37,7 @@ const defaults=()=>({
 })
 export default function FamilyHQ({state,setState,onNavigate}){
  const plan=state.familyPlan
+ useEffect(()=>{if(!plan)setState(s=>s.familyPlan?s:{...s,familyPlan:starter()})},[plan,setState])
  const [message,setMessage]=useState('')
  const [newTask,setNewTask]=useState('')
  const [owner,setOwner]=useState('Together')
