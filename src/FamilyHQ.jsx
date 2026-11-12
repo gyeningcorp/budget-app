@@ -60,14 +60,9 @@ export default function FamilyHQ({state,setState,onNavigate}){
  const update=patch=>{preserveScroll();setState(s=>{const previous=s.familyPlan?.plan || s.familyPlan || defaults();const plan={...previous,...patch};return {...s,familyPlan:{...s.familyPlan,plan},...(patch.schedules?{familyEvents:syncSchedule(s.familyEvents||[],plan.schedules)}:{})}})}
  const begin=()=>{preserveScroll();setState(s=>{const existing=s.familyPlan?.plan || s.familyPlan;const plan=existing&&Array.isArray(existing.schedules)?existing:defaults();return {...s,familyPlan:{...s.familyPlan,plan},familyEvents:syncSchedule(s.familyEvents||[],plan.schedules||[])}});setMessage('Family plan loaded and weekly activities added to Calendar. Existing bills and paychecks are unchanged; enter confirmed amounts and due dates to update your financial dashboard. No autopay was enabled.')}
  const addCalendar=()=>{
-  const start=dateKey(),weekday=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
-  const events=(plan.schedules||[]).map(item=>{
-   const d=new Date(start+'T12:00:00');d.setDate(d.getDate()+(weekday.indexOf(item.day)-d.getDay()+7)%7)
-   return {id:`family-plan-${item.id}`,title:item.title,date:dateKey(d),time:'',kind:'Family',owner:item.owner,location:'',notes:'Family HQ schedule — editable',repeat:'Weekly',weekdays:[weekday.indexOf(item.day)],endDate:''}
-  })
   preserveScroll()
   setState(s=>({...s,familyEvents:syncSchedule(s.familyEvents||[],plan.schedules||[]),familyPlan:{...s.familyPlan,plan:{...plan,calendarAdded:true}}}))
-  setMessage('Weekly schedule added to your calendar. Edit event times and details in Calendar.')
+  setMessage('Weekly schedule is available in Calendar. You can edit event times and reminders there.')
  }
  return <section className="family-space">
   <div className="family-heading"><div><p className="family-eyebrow">HOUSE OF GYENING</p><h2>Family HQ</h2><p>Shared priorities, clear responsibilities and protected family time.</p></div></div>
