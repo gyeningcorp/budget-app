@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Family from './Family.jsx'
 import FamilyHQ from './FamilyHQ.jsx'
+import FamilyHQ from './FamilyHQ.jsx'
 import useHousehold from './useHousehold'
 import Account from './Account'
 import DateNights from './DateNights'
@@ -454,6 +455,7 @@ export default function App() {
         </button>
       </div>
 
+      {tab === 'Family HQ' && <FamilyHQ state={state} setState={setState} onNavigate={setTab} />}
       {tab === 'Family HQ' && <FamilyHQ state={state} setState={setState} onNavigate={setTab} />}
       {['Calendar', 'Projects', 'Ideas'].includes(tab) && <Family tab={tab} state={state} setState={setState} onNavigate={setTab} />}
       {tab === 'Family' && <Account sync={sync} />}
