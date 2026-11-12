@@ -28,6 +28,19 @@ const checklist=[
  ['Career','Chris: review flexible primary roles'],['Career','Sarah: explore flexible income options']
 ]
 const priorities=[['Tier 1 — Essentials','Housing, electricity, water, heat, groceries, medical needs and essential transport'],['Tier 2 — Obligations','Debt minimums, phone and internet'],['Tier 3 — Pause first','Dining out, impulse purchases, optional subscriptions and extra debt payments']]
+const syncSchedule=(existing,schedules)=>{
+ const weekdays=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
+ const today=dateKey()
+ const ids=new Set(schedules.map(item=>`family-plan-${item.id}`))
+ const kept=existing.filter(event=>!String(event.id).startsWith('family-plan-')||ids.has(event.id))
+ const found=new Set(kept.map(event=>event.id))
+ const created=schedules.filter(item=>!found.has(`family-plan-${item.id}`)).map(item=>{
+  const weekday=weekdays.indexOf(item.day)
+  const d=new Date(today+'T12:00:00');d.setDate(d.getDate()+(weekday-d.getDay()+7)%7)
+  return {id:`family-plan-${item.id}`,title:item.title,date:dateKey(d),time:'',kind:'Family',owner:item.owner,location:'',notes:'Family HQ schedule — editable',repeat:'Weekly',weekdays:[weekday],endDate:''}
+ })
+ return [...kept,...created]
+}
 const defaults=()=>({
  allowance:'', capitalOne:'Freeze new spending', familyMessage:'',
  tasks:chores.map(([day,owner,title])=>({id:uid(),day,owner,title,done:false})),
@@ -36,7 +49,7 @@ const defaults=()=>({
  accounts:[{name:'Joint bills',purpose:'Shared household bills, groceries and childcare'},{name:'Chris personal',purpose:'Personal allowance and spending'},{name:'Sarah personal',purpose:'Personal allowance and spending'}]
 })
 export default function FamilyHQ({state,setState,onNavigate}){
- const plan=state.familyPlan
+ const plan=state.familyPlan?.plan || (Array.isArray(state.familyPlan?.schedules)?state.familyPlan:null)
  const pendingScroll=useRef(null)
  const preserveScroll=()=>{pendingScroll.current={x:window.scrollX,y:window.scrollY}}
  useLayoutEffect(()=>{if(pendingScroll.current){const {x,y}=pendingScroll.current;pendingScroll.current=null;window.scrollTo({left:x,top:y,behavior:'instant'})}})
@@ -44,22 +57,23 @@ export default function FamilyHQ({state,setState,onNavigate}){
  const [newTask,setNewTask]=useState('')
  const [owner,setOwner]=useState('Together')
  const [day,setDay]=useState('Monday')
- const update=patch=>{preserveScroll();setState(s=>({...s,familyPlan:{...s.familyPlan,...patch}}))}
- const begin=()=>{preserveScroll();setState(s=>({...s,familyPlan:defaults()}));setMessage('Editable household plan created. Nothing has been sent to a bank or scheduled for autopay.')}
+ const update=patch=>{preserveScroll();setState(s=>{const previous=s.familyPlan?.plan || s.familyPlan || defaults();const plan={...previous,...patch};return {...s,familyPlan:{...s.familyPlan,plan},...(patch.schedules?{familyEvents:syncSchedule(s.familyEvents||[],plan.schedules)}:{})}})}
+ const begin=()=>{preserveScroll();setState(s=>{const existing=s.familyPlan?.plan || s.familyPlan;const plan=existing&&Array.isArray(existing.schedules)?existing:defaults();return {...s,familyPlan:{...s.familyPlan,plan},familyEvents:syncSchedule(s.familyEvents||[],plan.schedules||[])}});setMessage('Family plan loaded and weekly activities added to Calendar. Existing bills and paychecks are unchanged; enter confirmed amounts and due dates to update your financial dashboard. No autopay was enabled.')}
  const addCalendar=()=>{
   const start=dateKey(),weekday=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
   const events=(plan.schedules||[]).map(item=>{
    const d=new Date(start+'T12:00:00');d.setDate(d.getDate()+(weekday.indexOf(item.day)-d.getDay()+7)%7)
-   return {id:uid(),title:item.title,date:dateKey(d),time:'',kind:'Family',owner:item.owner,location:'',notes:'Family HQ schedule — editable',repeat:'Weekly',weekdays:[weekday.indexOf(item.day)],endDate:''}
+   return {id:`family-plan-${item.id}`,title:item.title,date:dateKey(d),time:'',kind:'Family',owner:item.owner,location:'',notes:'Family HQ schedule — editable',repeat:'Weekly',weekdays:[weekday.indexOf(item.day)],endDate:''}
   })
   preserveScroll()
-  setState(s=>({...s,familyEvents:[...(s.familyEvents||[]),...events],familyPlan:{...s.familyPlan,calendarAdded:true}}))
+  setState(s=>({...s,familyEvents:syncSchedule(s.familyEvents||[],plan.schedules||[]),familyPlan:{...s.familyPlan,plan:{...plan,calendarAdded:true}}}))
   setMessage('Weekly schedule added to your calendar. Edit event times and details in Calendar.')
  }
  return <section className="family-space">
   <div className="family-heading"><div><p className="family-eyebrow">HOUSE OF GYENING</p><h2>Family HQ</h2><p>Shared priorities, clear responsibilities and protected family time.</p></div></div>
   {!plan?<div className="family-card"><h3>Start your family plan</h3><p>Load your proposed Chris and Sarah household schedule as an editable template. This does not connect accounts, activate autopay or change existing bills.</p><button className="btn" onClick={begin}>Load our editable family plan</button></div>:<>
    {message&&<p role="status" className="family-notice">{message}</p>}
+   <div className="family-actions"><button className="btn ghost" onClick={()=>onNavigate('Dashboard')}>Open dashboard</button><button className="btn ghost" onClick={()=>onNavigate('Calendar')}>Open calendar</button><button className="btn ghost" onClick={()=>onNavigate('Paychecks')}>Review bills and paychecks</button></div>
    <div className="family-card"><h3>Financial agreement</h3><p>Three-account structure — planning only, no bank transfers or autopay enabled.</p>
     {plan.accounts.map(a=><p key={a.name}><b>{a.name}:</b> {a.purpose}</p>)}
     <label className="family-field"><span>Equal personal allowance per person, per paycheck ($)</span><input type="number" min="0" step="0.01" value={plan.allowance} onChange={e=>update({allowance:e.target.value})}/></label>
