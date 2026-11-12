@@ -29,12 +29,11 @@ export function registerPush(app,{db,needFamily,baseURL}) {
     const days=event.repeat==='Weekly'?(event.weekdays||[]):[]
     const dates=[]
     if(event.repeat==='Weekly'){
-     for(let shift=0;shift<8;shift++){const d=new Date(now+shift*86400000);const date=d.toLocaleDateString('en-CA',{timeZone:'America/New_York'});if(days.includes(new Date(date+'T12:00:00Z').getUTCDay())&&date>=event.date&&(!event.endDate||date<=event.endDate))dates.push(date)}
+     for(let shift=0;shift<8;shift++){const d=new Date(now+shift*86400000);const date=new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(d);if(days.includes(new Date(date+'T12:00:00Z').getUTCDay())&&date>=event.date&&(!event.endDate||date<=event.endDate))dates.push(date)}
     }else dates.push(event.date)
     for(const date of dates)for(const offset of offsets(event)){
      if(!Number.isInteger(offset)||offset<0||offset>40320)continue
-     const timestamp=Date.parse(date+'T'+event.time+':00-05:00')-offset*60000
-     // Timezone offset is resolved by Intl below; -05:00 is not valid in summer.
+     // Resolve local event time using the household's current Eastern timezone offset.
      const local=Date.parse(date+'T'+event.time+':00Z')
      const hour=new Date(local).toLocaleString('en-US',{timeZone:'America/New_York',timeZoneName:'shortOffset'}).match(/GMT([+-]\d{1,2})(?::(\d{2}))?/)
      const zone=hour?Number(hour[1])*60+Math.sign(Number(hour[1]))*Number(hour[2]||0):-300
