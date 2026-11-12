@@ -8,6 +8,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { registerBilling } from './billing.js'
+import { registerPush } from './push.js'
 import { emptyShared, applyOps } from '../shared/sync.js'
 const hash = value => createHash('sha256').update(value).digest('hex')
 export async function createApp({ databasePath, baseURL, secret, production = false, aiFetch = fetch, billFetch = fetch }) {
@@ -134,6 +135,7 @@ export async function createApp({ databasePath, baseURL, secret, production = fa
       res.json(await callClaude(req.member.household_id,{messages,system,tools,model,max_tokens:req.body.max_tokens}))
     } catch(error) { res.status(error.status||502).json({error:error.status?error.message:'The AI request could not be completed. Please try again.'}) }
   })
+  const push=registerPush(app,{db,needFamily,baseURL})
   const billing=registerBilling(app,{db,needFamily,needOwner,encryptKey,decryptKey,callClaude,billFetch})
   app.get('/api/family/state', needFamily, (req, res) => res.json(snapshot(req.member.household_id)))
   app.post('/api/family/state', needFamily, (req, res) => {
@@ -155,5 +157,5 @@ export async function createApp({ databasePath, baseURL, secret, production = fa
   app.use(express.static(dist, { index: false, maxAge: '1h' }))
   app.get('/{*any}', (req, res) => { res.setHeader('Cache-Control', 'no-cache'); res.sendFile(resolve(dist, 'index.html')) })
   app.use((error, req, res, next) => { console.error('Request failed:', error.code || error.name); res.status(error.status || 500).json({ error: 'The request could not be completed. Please try again.' }) })
-  return { app, auth, db, checkDueConnections: billing.checkDueConnections, close: () => db.close() }
+  return { app, auth, db, checkDueConnections: billing.checkDueConnections, checkDuePush:push.checkDuePush, close: () => db.close() }
 }

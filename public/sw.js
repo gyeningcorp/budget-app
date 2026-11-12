@@ -32,3 +32,12 @@ self.addEventListener('fetch', event => {
       .catch(() => caches.match(request).then(cached => cached || caches.match('./')))
   )
 })
+
+self.addEventListener('push', event => {
+ const data=event.data?.json()||{}
+ event.waitUntil(self.registration.showNotification(data.title||'Family Hub reminder',{body:data.body||'You have an upcoming event',icon:'/icon.svg',badge:'/icon.svg',data:{url:data.url||'/'}}))
+})
+self.addEventListener('notificationclick',event=>{
+ event.notification.close()
+ event.waitUntil(clients.openWindow(event.notification.data?.url||'/'))
+})
