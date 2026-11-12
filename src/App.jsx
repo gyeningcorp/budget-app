@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Family from './Family.jsx'
+import FamilyHQ from './FamilyHQ.jsx'
 import useHousehold from './useHousehold'
 import Account from './Account'
 import DateNights from './DateNights'
@@ -432,7 +433,7 @@ export default function App() {
       <div className="family-connection"><span>{sync.account?.household ? sync.account.household.name : "Your family, in one place"}</span><button className="btn ghost" onClick={() => setTab('Family')}>{sync.account ? 'Family settings' : 'Family sign in'}</button></div>
       {sync.conflict && <p role="alert" className="family-error">A simultaneous edit needs your review. <button className="btn ghost" onClick={() => setTab('Family')}>Review changes</button></p>}
       <nav className="tabs" aria-label="App sections">
-        {['Dashboard', 'Calendar', 'Date nights', 'Projects', 'Groceries', 'Meals', 'Paychecks', 'Debt', 'Bill accounts', 'Ideas', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Family', 'Settings'].map((t) => (
+        {['Dashboard', 'Family HQ', 'Calendar', 'Date nights', 'Projects', 'Groceries', 'Meals', 'Paychecks', 'Debt', 'Bill accounts', 'Ideas', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Family', 'Settings'].map((t) => (
           <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>
             {t}
           </button>
@@ -453,6 +454,7 @@ export default function App() {
         </button>
       </div>
 
+      {tab === 'Family HQ' && <FamilyHQ state={state} setState={setState} onNavigate={setTab} />}
       {['Calendar', 'Projects', 'Ideas'].includes(tab) && <Family tab={tab} state={state} setState={setState} onNavigate={setTab} />}
       {tab === 'Family' && <Account sync={sync} />}
       {tab === 'Bill accounts' && <BillAccounts sync={sync} onNavigate={setTab} />}
@@ -2169,7 +2171,7 @@ function DebtPlanner({ state, setState, totals, onNavigate, onAskAi }) {
 }
 
 // --- In-app AI assistant (talks + edits your data across the ENTIRE app) ---
-const PAGES = ['Dashboard', 'Calendar', 'Date nights', 'Projects', 'Groceries', 'Meals', 'Paychecks', 'Debt', 'Bill accounts', 'Ideas', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Family', 'Settings']
+const PAGES = ['Dashboard', 'Family HQ', 'Calendar', 'Date nights', 'Projects', 'Groceries', 'Meals', 'Paychecks', 'Debt', 'Bill accounts', 'Ideas', 'Transactions', 'Budgets', 'Advisor', 'Opportunities', 'Family', 'Settings']
 
 // Tools the model can call to mutate any part of the household app in real time.
 const AI_TOOLS = [
