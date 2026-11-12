@@ -32,7 +32,7 @@ const syncSchedule=(existing,schedules)=>{
  const weekdays=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
  const today=dateKey()
  const ids=new Set(schedules.map(item=>`family-plan-${item.id}`))
- const kept=existing.filter(event=>!String(event.id).startsWith('family-plan-')||ids.has(event.id))
+ const kept=existing.filter(event=>!String(event.id).startsWith('family-plan-')||ids.has(event.id)).map(event=>{const schedule=schedules.find(item=>`family-plan-${item.id}`===event.id);return schedule?{...event,title:schedule.title,owner:schedule.owner,weekdays:[weekdays.indexOf(schedule.day)]}:event})
  const found=new Set(kept.map(event=>event.id))
  const created=schedules.filter(item=>!found.has(`family-plan-${item.id}`)).map(item=>{
   const weekday=weekdays.indexOf(item.day)
@@ -48,12 +48,15 @@ const defaults=()=>({
  schedules:rhythms.map(([day,owner,title])=>({id:uid(),day,owner,title})),
  accounts:[{name:'Joint bills',purpose:'Shared household bills, groceries and childcare'},{name:'Chris personal',purpose:'Personal allowance and spending'},{name:'Sarah personal',purpose:'Personal allowance and spending'}]
 })
-export default function FamilyHQ({state,setState,onNavigate}){
+export default function FamilyHQ({state,setState,onNavigate,syncStatus,pendingCount}){
  const plan=state.familyPlan?.plan || (Array.isArray(state.familyPlan?.schedules)?state.familyPlan:null)
  const pendingScroll=useRef(null)
  const preserveScroll=()=>{pendingScroll.current={x:window.scrollX,y:window.scrollY}}
  useLayoutEffect(()=>{if(pendingScroll.current){const {x,y}=pendingScroll.current;pendingScroll.current=null;window.scrollTo({left:x,top:y,behavior:'instant'})}})
  const [message,setMessage]=useState('')
+ const [newSchedule,setNewSchedule]=useState('')
+ const [scheduleDay,setScheduleDay]=useState('Monday')
+ const [scheduleOwner,setScheduleOwner]=useState('Together')
  const [newTask,setNewTask]=useState('')
  const [owner,setOwner]=useState('Together')
  const [day,setDay]=useState('Monday')
@@ -65,12 +68,13 @@ export default function FamilyHQ({state,setState,onNavigate}){
   setMessage('Weekly schedule is available in Calendar. You can edit event times and reminders there.')
  }
  return <section className="family-space">
-  <div className="family-heading"><div><p className="family-eyebrow">HOUSE OF GYENING</p><h2>Family HQ</h2><p>Shared priorities, clear responsibilities and protected family time.</p></div></div>
+  <div className="family-heading"><div><p className="family-eyebrow">HOUSE OF GYENING</p><h2>Family HQ</h2><p>Shared priorities, clear responsibilities and protected family time.</p><p role="status">{pendingCount ? `Saving ${pendingCount} family change(s)…` : syncStatus}</p></div></div>
   {!plan?<div className="family-card"><h3>Start your family plan</h3><p>Load your proposed Chris and Sarah household schedule as an editable template. This does not connect accounts, activate autopay or change existing bills.</p><button className="btn" onClick={begin}>Load our editable family plan</button></div>:<>
    {message&&<p role="status" className="family-notice">{message}</p>}
    <div className="family-actions"><button className="btn ghost" onClick={()=>onNavigate('Dashboard')}>Open dashboard</button><button className="btn ghost" onClick={()=>onNavigate('Calendar')}>Open calendar</button><button className="btn ghost" onClick={()=>onNavigate('Paychecks')}>Review bills and paychecks</button></div>
+   <div className="family-actions"><button className="btn" onClick={()=>{preserveScroll();setMessage(pendingCount?'Changes are queued for syncing. Check the sync status above.':'Your edits are saved automatically. Check the sync status above for confirmation.')}}>Save family plan</button></div>
    <div className="family-card"><h3>Financial agreement</h3><p>Three-account structure — planning only, no bank transfers or autopay enabled.</p>
-    {plan.accounts.map(a=><p key={a.name}><b>{a.name}:</b> {a.purpose}</p>)}
+    {plan.accounts.map((a,i)=><label className="family-field" key={a.name}><span>{a.name} — purpose</span><input value={a.purpose} onChange={e=>update({accounts:plan.accounts.map((entry,j)=>j===i?{...entry,purpose:e.target.value}:entry)})}/></label>)}
     <label className="family-field"><span>Equal personal allowance per person, per paycheck ($)</span><input type="number" min="0" step="0.01" value={plan.allowance} onChange={e=>update({allowance:e.target.value})}/></label>
     <p>Payday review: 1st — housing, utilities, first-half groceries and transport. 15th — remaining bills, debt minimums and second-half essentials. Confirm actual pay dates and bill due dates before changing autopay with providers.</p>
     {priorities.map(([title,description])=><p key={title}><b>{title}:</b> {description}</p>)}
@@ -79,8 +83,9 @@ export default function FamilyHQ({state,setState,onNavigate}){
     <button className="btn ghost" onClick={()=>onNavigate('Paychecks')}>Review bills and paychecks</button>
    </div>
    <div className="family-card"><h3>Weekly work, childcare and quality time</h3><p>Sarah's Friday–Monday shifts are tentative. Confirm before relying on childcare coverage. WFH is not automatically childcare availability.</p>
-    {(plan.schedules||[]).map(item=><div key={item.id} className="family-agenda"><div><small>{item.day} · {item.owner}</small><p>{item.title}</p></div><button className="btn ghost" onClick={()=>update({schedules:plan.schedules.filter(x=>x.id!==item.id)})}>Remove</button></div>)}
-    <button className="btn" disabled={!!plan.calendarAdded} onClick={addCalendar}>{plan.calendarAdded?'Schedule added to calendar':'Add weekly schedule to calendar'}</button>
+    {(plan.schedules||[]).map(item=><div key={item.id} className="family-agenda"><div><small>{item.day} · {item.owner}</small><input aria-label="Schedule activity" value={item.title} onChange={e=>update({schedules:plan.schedules.map(x=>x.id===item.id?{...x,title:e.target.value}:x)})}/></div><button className="btn ghost" onClick={()=>update({schedules:plan.schedules.filter(x=>x.id!==item.id)})}>Remove</button></div>)}
+    <div className="family-form-grid"><label className="family-field"><span>Day</span><select value={scheduleDay} onChange={e=>setScheduleDay(e.target.value)}>{['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map(x=><option key={x}>{x}</option>)}</select></label><label className="family-field"><span>Owner</span><select value={scheduleOwner} onChange={e=>setScheduleOwner(e.target.value)}>{['Chris','Sarah','Together'].map(x=><option key={x}>{x}</option>)}</select></label></div><label className="family-field"><span>New calendar activity</span><input value={newSchedule} onChange={e=>setNewSchedule(e.target.value)}/></label><button className="btn" disabled={!newSchedule.trim()} onClick={()=>{update({schedules:[...(plan.schedules||[]),{id:uid(),day:scheduleDay,owner:scheduleOwner,title:newSchedule.trim()}]});setNewSchedule('')}}>Add calendar activity</button>}
+    <button className="btn" onClick={addCalendar}>Sync weekly schedule to calendar</button>
     <button className="btn ghost" onClick={()=>onNavigate('Calendar')}>Open calendar</button>
    </div>
    <div className="family-card"><h3>Chores and childcare</h3><p>Check off responsibilities as completed. Reset when starting a new week.</p>
