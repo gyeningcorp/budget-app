@@ -1,4 +1,29 @@
-import webpush from 'web-push'
+import {createECDH,createPrivateKey,createSign,createCipheriv,hkdfSync,randomBytes} from 'node:crypto'
+const b64=value=>Buffer.from(value).toString('base64url')
+const derive=(key,salt,info,length)=>Buffer.from(hkdfSync('sha256',key,salt,info,length))
+function encryptPayload(subscription,payload){
+ const receiver=Buffer.from(subscription.keys.p256dh,'base64url'),auth=Buffer.from(subscription.keys.auth,'base64url')
+ const ephemeral=createECDH('prime256v1');ephemeral.generateKeys()
+ const sender=ephemeral.getPublicKey(), shared=ephemeral.computeSecret(receiver)
+ const ikm=derive(shared,auth,Buffer.concat([Buffer.from('WebPush: info\\0'),receiver,sender]),32)
+ const salt=randomBytes(16),cek=derive(ikm,salt,Buffer.from('Content-Encoding: aes128gcm\\0'),16),nonce=derive(ikm,salt,Buffer.from('Content-Encoding: nonce\\0'),12)
+ const cipher=createCipheriv('aes-128-gcm',cek,nonce)
+ const encrypted=Buffer.concat([cipher.update(Buffer.concat([Buffer.from(payload),Buffer.from([2])])),cipher.final(),cipher.getAuthTag()])
+ const size=Buffer.alloc(4);size.writeUInt32BE(4096)
+ return Buffer.concat([salt,size,Buffer.from([sender.length]),sender,encrypted])
+}
+async function sendWebPush(subscription,payload,publicKey,privateKey,baseURL){
+ const key=Buffer.from(publicKey,'base64url'),x=b64(key.subarray(1,33)),y=b64(key.subarray(33,65))
+ const privateObject=createPrivateKey({key:{kty:'EC',crv:'P-256',x,y,d:privateKey},format:'jwk'})
+ const origin=new URL(subscription.endpoint).origin
+ const header=b64(JSON.stringify({typ:'JWT',alg:'ES256'}))
+ const claims=b64(JSON.stringify({aud:origin,exp:Math.floor(Date.now()/1000)+3600,sub:'mailto:notifications@'+new URL(baseURL).hostname}))
+ const signing=createSign('SHA256');signing.update(header+'.'+claims);signing.end()
+ const token=header+'.'+claims+'.'+b64(signing.sign({key:privateObject,dsaEncoding:'ieee-p1363'}))
+ const response=await fetch(subscription.endpoint,{method:'POST',headers:{Authorization:'vapid t='+token+', k='+publicKey,TTL:'3600','Content-Encoding':'aes128gcm','Content-Type':'application/octet-stream'},body:encryptPayload(subscription,payload),signal:AbortSignal.timeout(10000)})
+ if(!response.ok){const error=new Error('Push provider rejected notification');error.statusCode=response.status;throw error}
+}
+
 const offsets = event => Array.isArray(event.reminders) ? event.reminders : []
 const easternDay = date => {const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(date);const get=type=>parts.find(p=>p.type===type).value;return `${get('year')}-${get('month')}-${get('day')}`}
 const validSubscription = value => value && typeof value.endpoint === 'string' && /^https:\/\//.test(value.endpoint) && value.endpoint.length < 2048 && typeof value.keys?.p256dh === 'string' && typeof value.keys?.auth === 'string'
@@ -7,7 +32,7 @@ export function registerPush(app,{db,needFamily,baseURL}) {
  CREATE TABLE IF NOT EXISTS push_deliveries (household_id TEXT NOT NULL, event_id TEXT NOT NULL, scheduled_at INTEGER NOT NULL, PRIMARY KEY(household_id,event_id,scheduled_at));`)
  const publicKey=process.env.VAPID_PUBLIC_KEY, privateKey=process.env.VAPID_PRIVATE_KEY
  const configured=Boolean(publicKey && privateKey)
- if(configured) webpush.setVapidDetails('mailto:notifications@'+new URL(baseURL).hostname,publicKey,privateKey)
+
  app.get('/api/family/push/config',needFamily,(req,res)=>res.json({enabled:configured,publicKey:configured?publicKey:null}))
  app.post('/api/family/push/subscribe',needFamily,(req,res)=>{
   if(!configured)return res.status(503).json({error:'Push notifications are not configured.'})
@@ -44,7 +69,7 @@ export function registerPush(app,{db,needFamily,baseURL}) {
      if(!inserted.changes)continue
      const payload=JSON.stringify({title:event.title,body:offset===0?'Starting now':`Starts in ${offset} minutes`,url:'/#calendar'})
      for(const row of db.prepare('SELECT endpoint,subscription FROM push_subscriptions WHERE household_id=?').all(household.id)){
-      try{await webpush.sendNotification(JSON.parse(row.subscription),payload)}catch(error){if([404,410].includes(error.statusCode))db.prepare('DELETE FROM push_subscriptions WHERE endpoint=?').run(row.endpoint);else console.error('Push delivery failed:',error.statusCode||error.message)}
+      try{await sendWebPush(JSON.parse(row.subscription),payload,publicKey,privateKey,baseURL)}catch(error){if([404,410].includes(error.statusCode))db.prepare('DELETE FROM push_subscriptions WHERE endpoint=?').run(row.endpoint);else console.error('Push delivery failed:',error.statusCode||error.message)}
      }
     }
    }
