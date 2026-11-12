@@ -23,7 +23,30 @@ export function holidays(year) {
   return out.filter(e=>e.date.startsWith(String(year))).sort((a,b)=>a.date.localeCompare(b.date))
 }
 export function eventsForYear(events,year) {
- return events.flatMap(e=> {if(e.repeat!=='Yearly')return e.date.startsWith(String(year))?[e]:[]; if(Number(e.date.slice(0,4))>year)return [];const date=`${year}${e.date.slice(4)}`;return dateKey(parseDay(date))===date?[{...e,date}]:[]})
+ const first=`${year}-01-01`, last=`${year}-12-31`
+ return events.flatMap(e=>{
+  if (!e.date) return []
+  const start=e.date, end=e.endDate || last, mode=e.repeat || 'Once'
+  const occurrence=date=>({...e,date})
+  if (mode==='Once') return start>=first&&start<=last?[occurrence(start)]:[]
+  if (mode==='Selected dates') return [...new Set([start,...(e.dates||[])])].filter(d=>d>=first&&d<=last).map(occurrence)
+  if (mode==='Date range') {
+   const stop=e.endDate||start, out=[]
+   for(let d=parseDay(start);dateKey(d)<=stop&&out.length<3660;d.setDate(d.getDate()+1))if(dateKey(d)>=first&&dateKey(d)<=last)out.push(occurrence(dateKey(d)))
+   return out
+  }
+  const out=[], begin=start>first?start:first, stop=end<last?end:last
+  if(begin>stop)return []
+  if(mode==='Yearly') {
+   const date=`${year}${start.slice(4)}`
+   return date>=begin&&date<=stop&&dateKey(parseDay(date))===date?[occurrence(date)]:[]
+  }
+  for(let d=parseDay(begin);dateKey(d)<=stop;d.setDate(d.getDate()+1)){
+   const day=dateKey(d), delta=Math.round((parseDay(day)-parseDay(start))/86400000)
+   if(mode==='Daily'||mode==='Weekly'&&(e.weekdays?.length?e.weekdays.includes(d.getDay()):delta%7===0)||mode==='Monthly'&&d.getDate()===Number(start.slice(8)))out.push(occurrence(day))
+  }
+  return out
+ })
 }
 export const IDEAS = [
  ['Coffee & a walk','Date night','Free / low cost','Take a thermos to a favorite park and leave time to talk.'],
