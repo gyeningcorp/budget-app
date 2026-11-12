@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { dateKey, parseDay, holidays, eventsForYear, IDEAS } from './family.js'
 import './family.css'
+import PushSettings from './PushSettings.jsx'
 const blankEvent = (date=dateKey()) => ({title:'',date,time:'',kind:'Family',owner:'',location:'',notes:'',repeat:'Once',endDate:'',dates:[],weekdays:[],reminders:[]})
 const uid=()=>crypto.randomUUID()
 function Field({label,children}) {return <label className="family-field"><span>{label}</span>{children}</label>}
@@ -31,7 +32,7 @@ export default function Family({tab,state,setState,onNavigate}) {
  function move(n){const d=new Date(year,monthIndex+n,1);setMonth(dateKey(d).slice(0,7));setSelected(dateKey(d))}
  function exportCalendar(){const esc=s=>String(s||'').replace(/\\/g,'\\\\').replace(/\n/g,'\\n').replace(/,/g,'\\,').replace(/;/g,'\\;');const lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//House of Gyening//Family Calendar//EN'];for(const e of annual){lines.push('BEGIN:VEVENT',`UID:${esc(e.id)}-${e.date}@houseofgyening`,`DTSTAMP:${new Date().toISOString().replace(/[-:]/g,'').replace(/\.\d{3}/,'')}`,`DTSTART;VALUE=DATE:${e.date.replaceAll('-','')}`,`SUMMARY:${esc(e.title)}`,`DESCRIPTION:${esc([e.time,e.owner,e.notes].filter(Boolean).join(' · '))}`,`LOCATION:${esc(e.location)}`,'END:VEVENT')}lines.push('END:VCALENDAR');saveFile(lines.join('\r\n'),`family-calendar-${year}.ics`,'text/calendar');setNotice('Calendar exported as all-day entries; any event times are included in the descriptions.')}
  const start=new Date(year,monthIndex,1).getDay(),days=new Date(year,monthIndex+1,0).getDate()
- return <section className="family-space">
+ return <section className="family-space"><PushSettings/>
   <div className="family-heading"><div><p className="family-eyebrow">HOUSE OF GYENING</p><h2>{tab==='Calendar'?'Make room for what matters':tab==='Projects'?'Build a little, together':'Your next good memory'}</h2><p>{tab==='Calendar'?'Family plans, celebrations and project deadlines in one place.':tab==='Projects'?'Plan the work, share responsibilities and celebrate progress.':'Simple date nights and family experiences, ready to plan.'}</p></div></div>
   <p className="family-storage">{state._cloud ? 'Shared with your household. Changes sync automatically while connected.' : 'Saved on this device. Open Family settings to connect your household.'}</p>
   {notice&&<p role="status" className="family-notice">{notice}</p>}
