@@ -1,5 +1,6 @@
 import webpush from 'web-push'
 const offsets = event => Array.isArray(event.reminders) ? event.reminders : []
+const easternDay = date => {const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(date);const get=type=>parts.find(p=>p.type===type).value;return `${get('year')}-${get('month')}-${get('day')}`}
 const validSubscription = value => value && typeof value.endpoint === 'string' && /^https:\/\//.test(value.endpoint) && value.endpoint.length < 2048 && typeof value.keys?.p256dh === 'string' && typeof value.keys?.auth === 'string'
 export function registerPush(app,{db,needFamily,baseURL}) {
  db.exec(`CREATE TABLE IF NOT EXISTS push_subscriptions (endpoint TEXT PRIMARY KEY, household_id TEXT NOT NULL, user_id TEXT NOT NULL, subscription TEXT NOT NULL, created_at INTEGER NOT NULL);
@@ -29,7 +30,7 @@ export function registerPush(app,{db,needFamily,baseURL}) {
     const days=event.repeat==='Weekly'?(event.weekdays||[]):[]
     const dates=[]
     if(event.repeat==='Weekly'){
-     for(let shift=0;shift<8;shift++){const d=new Date(now+shift*86400000);const date=new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(d);if(days.includes(new Date(date+'T12:00:00Z').getUTCDay())&&date>=event.date&&(!event.endDate||date<=event.endDate))dates.push(date)}
+     for(let shift=-1;shift<8;shift++){const d=new Date(now+shift*86400000);const date=easternDay(d);if(days.includes(new Date(date+'T12:00:00Z').getUTCDay())&&date>=event.date&&(!event.endDate||date<=event.endDate))dates.push(date)}
     }else dates.push(event.date)
     for(const date of dates)for(const offset of offsets(event)){
      if(!Number.isInteger(offset)||offset<0||offset>40320)continue
