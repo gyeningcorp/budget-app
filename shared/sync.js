@@ -1,6 +1,7 @@
 export const ARRAY_FIELDS = ['transactions', 'familyEvents', 'familyProjects', 'dateNights', 'groceries', 'groceryStaples', 'meals', 'bills', 'billAccounts', 'budgetItems', 'paychecks', 'debts']
-export const MAP_FIELDS = ['budgets', 'paycheckPlan', 'familyPlan']
-export const SHARED_FIELDS = [...ARRAY_FIELDS, ...MAP_FIELDS]
+export const MAP_FIELDS = ['budgets', 'paycheckPlan']
+export const OBJECT_FIELDS = ['familyPlan']
+export const SHARED_FIELDS = [...ARRAY_FIELDS, ...MAP_FIELDS, ...OBJECT_FIELDS]
 const unsafe = key => ['__proto__', 'constructor', 'prototype'].includes(key)
 export const emptyShared = () => Object.fromEntries(SHARED_FIELDS.map(k => [k, ARRAY_FIELDS.includes(k) ? [] : {}]))
 export const sharedState = state => Object.fromEntries(SHARED_FIELDS.map(k => [k, state[k] ?? (ARRAY_FIELDS.includes(k) ? [] : {})]))
@@ -15,6 +16,7 @@ export function differences(before, after) {
     const a = before[field]?.[id] ?? null, b = after[field]?.[id] ?? null
     if (!equal(a, b)) ops.push({ field, id, before: a, value: b })
   }
+  for (const field of OBJECT_FIELDS) if (!equal(before[field] || {},after[field] || {})) ops.push({field,id:'root',before:before[field] || {},value:after[field] || {}})
   return ops
 }
 export function validateOps(ops) {
@@ -22,6 +24,7 @@ export function validateOps(ops) {
   for (const op of ops) {
     if (!op || !SHARED_FIELDS.includes(op.field) || typeof op.id !== 'string' || !op.id || op.id.length > 200 || unsafe(op.id)) throw new Error('Invalid change')
     if (ARRAY_FIELDS.includes(op.field) && op.value !== null && (!op.value || Array.isArray(op.value) || op.value.id !== op.id)) throw new Error('Invalid record')
+    if (OBJECT_FIELDS.includes(op.field) && (op.id !== 'root' || !op.value || typeof op.value !== 'object' || Array.isArray(op.value))) throw new Error('Invalid family plan')
     validateRecord(op.field, op.value)
     if (JSON.stringify(op).length > 50000) throw new Error('Record too large')
   }
@@ -30,11 +33,12 @@ export function applyOps(state, ops, checkConflicts = false) {
   validateOps(ops)
   const next = structuredClone(sharedState(state))
   for (const op of ops) {
-    const list = ARRAY_FIELDS.includes(op.field), current = list ? next[op.field].find(x => x.id === op.id) ?? null : next[op.field][op.id] ?? null
+    const list = ARRAY_FIELDS.includes(op.field), object = OBJECT_FIELDS.includes(op.field), current = list ? next[op.field].find(x => x.id === op.id) ?? null : object ? next[op.field] ?? {} : next[op.field][op.id] ?? null
     if (checkConflicts && !equal(current, op.before) && !equal(current, op.value)) {
       const error = new Error('Someone changed the same item. Review the latest version before retrying.'); error.code = 'CONFLICT'; throw error
     }
-    if (list) { const index = next[op.field].findIndex(x => x.id === op.id); if (op.value === null) next[op.field] = next[op.field].filter(x => x.id !== op.id); else if (index < 0) next[op.field].push(op.value); else next[op.field][index] = op.value }
+    if (object) next[op.field] = op.value || {}
+    else if (list) { const index = next[op.field].findIndex(x => x.id === op.id); if (op.value === null) next[op.field] = next[op.field].filter(x => x.id !== op.id); else if (index < 0) next[op.field].push(op.value); else next[op.field][index] = op.value }
     else if (op.value === null) delete next[op.field][op.id]
     else next[op.field][op.id] = op.value
   }
