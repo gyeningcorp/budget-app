@@ -1,5 +1,5 @@
 export const ARRAY_FIELDS = ['transactions', 'familyEvents', 'familyProjects', 'dateNights', 'groceries', 'groceryStaples', 'meals', 'bills', 'billAccounts', 'budgetItems', 'paychecks', 'debts']
-export const MAP_FIELDS = ['budgets', 'paycheckPlan']
+export const MAP_FIELDS = ['budgets', 'paycheckPlan', 'familyPlan']
 export const SHARED_FIELDS = [...ARRAY_FIELDS, ...MAP_FIELDS]
 const unsafe = key => ['__proto__', 'constructor', 'prototype'].includes(key)
 export const emptyShared = () => Object.fromEntries(SHARED_FIELDS.map(k => [k, ARRAY_FIELDS.includes(k) ? [] : {}]))
