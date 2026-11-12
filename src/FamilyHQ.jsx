@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { dateKey } from './family.js'
 const uid=()=>crypto.randomUUID()
 const chores=[
@@ -37,18 +37,22 @@ const defaults=()=>({
 })
 export default function FamilyHQ({state,setState,onNavigate}){
  const plan=state.familyPlan
+ const pendingScroll=useRef(null)
+ const preserveScroll=()=>{pendingScroll.current={x:window.scrollX,y:window.scrollY}}
+ useLayoutEffect(()=>{if(pendingScroll.current){const {x,y}=pendingScroll.current;pendingScroll.current=null;window.scrollTo({left:x,top:y,behavior:'instant'})}})
  const [message,setMessage]=useState('')
  const [newTask,setNewTask]=useState('')
  const [owner,setOwner]=useState('Together')
  const [day,setDay]=useState('Monday')
- const update=patch=>setState(s=>({...s,familyPlan:{...s.familyPlan,...patch}}))
- const begin=()=>{setState(s=>({...s,familyPlan:defaults()}));setMessage('Editable household plan created. Nothing has been sent to a bank or scheduled for autopay.')}
+ const update=patch=>{preserveScroll();setState(s=>({...s,familyPlan:{...s.familyPlan,...patch}}))}
+ const begin=()=>{preserveScroll();setState(s=>({...s,familyPlan:defaults()}));setMessage('Editable household plan created. Nothing has been sent to a bank or scheduled for autopay.')}
  const addCalendar=()=>{
   const start=dateKey(),weekday=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
   const events=(plan.schedules||[]).map(item=>{
    const d=new Date(start+'T12:00:00');d.setDate(d.getDate()+(weekday.indexOf(item.day)-d.getDay()+7)%7)
    return {id:uid(),title:item.title,date:dateKey(d),time:'',kind:'Family',owner:item.owner,location:'',notes:'Family HQ schedule — editable',repeat:'Weekly',weekdays:[weekday.indexOf(item.day)],endDate:''}
   })
+  preserveScroll()
   setState(s=>({...s,familyEvents:[...(s.familyEvents||[]),...events],familyPlan:{...s.familyPlan,calendarAdded:true}}))
   setMessage('Weekly schedule added to your calendar. Edit event times and details in Calendar.')
  }
